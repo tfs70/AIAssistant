@@ -1,8 +1,12 @@
-pip
-rich
-chromadb
 langchain
-langchain-chroma
+langchain-core
 langchain-ollama
-langchain-community
-langchain-text-splitters
+ollama
+
+
+# chromadb
+# langchain-chroma
+# elasticsearch
+# streamlit
+# fastapi
+# uvicorn
