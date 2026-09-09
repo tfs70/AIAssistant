@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Final
 
 from module.chat_model import Chat
+from module.message_model import Message
 
 
 DEFAULT_USER_ID: Final[str] = "default"
@@ -35,7 +36,7 @@ def create_chat(
 def save_chat(
     chat: Chat,
 ) -> None:
-    """ذخیره یک Chat در فایل حافظه"""
+    """ذخیره یا بروزرسانی یک Chat در فایل حافظه"""
 
     os.makedirs(
         name=os.path.dirname(MEMORY_FILE_PATH),
@@ -63,7 +64,20 @@ def save_chat(
         "updated_at": chat.updated_at.isoformat(),
     }
 
-    memory["chats"].append(chat_data)
+    existing_chat = next(
+        (
+            item
+            for item in memory["chats"]
+            if item["chat_id"] == chat.chat_id
+            and item["user_id"] == chat.user_id
+        ),
+        None,
+    )
+
+    if existing_chat:
+        existing_chat.update(chat_data)
+    else:
+        memory["chats"].append(chat_data)
 
     with open(
         file=MEMORY_FILE_PATH,
@@ -77,13 +91,11 @@ def save_chat(
             indent=4,
         )
 
+
 def save_message(
-    role: str,
-    content: str,
-    user_id: str,
-    chat_id: str,
+    message: Message,
 ) -> None:
-    """ذخیره یک پیام در فایل حافظه"""
+    """ذخیره یک Message در فایل حافظه"""
 
     os.makedirs(
         name=os.path.dirname(MEMORY_FILE_PATH),
@@ -103,15 +115,15 @@ def save_message(
         ) as file:
             memory = json.load(file)
 
-    message: dict[str, str] = {
-        "user_id": user_id,
-        "chat_id": chat_id,
-        "role": role,
-        "content": content,
-        "created_at" : datetime.now().isoformat()
+    message_data: dict[str, str] = {
+        "user_id": message.user_id,
+        "chat_id": message.chat_id,
+        "role": message.role,
+        "content": message.content,
+        "created_at": message.created_at.isoformat(),
     }
 
-    memory["messages"].append(message)
+    memory["messages"].append(message_data)
 
     with open(
         file=MEMORY_FILE_PATH,
@@ -125,11 +137,12 @@ def save_message(
             indent=4,
         )
 
+
 def get_recent_messages(
     user_id: str,
     chat_id: str,
     limit: int = 5,
-) -> list[dict[str, str]]:
+) -> list[Message]:
     """دریافت آخرین پیام‌های یک Chat"""
 
     if not os.path.exists(path=MEMORY_FILE_PATH):
@@ -142,13 +155,21 @@ def get_recent_messages(
     ) as file:
         memory: dict[str, list[dict[str, str]]] = json.load(file)
 
-    messages: list[dict[str, str]] = memory["messages"]
-
-    filtered_messages: list[dict[str, str]] = [
-        message
-        for message in messages
+    messages: list[Message] = [
+        Message(
+            user_id=message["user_id"],
+            chat_id=message["chat_id"],
+            role=message["role"],
+            content=message["content"],
+            created_at=datetime.fromisoformat(message["created_at"]),
+        )
+        for message in memory["messages"]
         if message["user_id"] == user_id
         and message["chat_id"] == chat_id
     ]
 
-    return filtered_messages[-limit:]
+    messages.sort(
+        key=lambda message: message.created_at,
+    )
+
+    return messages[-limit:]
