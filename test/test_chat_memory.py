@@ -1,8 +1,11 @@
 from datetime import datetime
+from time import sleep
 
 from module.chat_memory_module import (
     create_chat,
+    get_chat_messages,
     get_recent_messages,
+    get_user_chats,
     save_chat,
     save_message,
 )
@@ -34,37 +37,6 @@ save_chat(
 )
 
 
-save_message(
-    message=Message(
-        user_id=user_1,
-        chat_id=chat_1.chat_id,
-        role="user",
-        content="پیام مربوط به گفتگوی اول",
-        created_at=datetime.now(),
-    ),
-)
-
-save_message(
-    message=Message(
-        user_id=user_1,
-        chat_id=chat_1.chat_id,
-        role="assistant",
-        content="پاسخ مربوط به گفتگوی اول",
-        created_at=datetime.now(),
-    ),
-)
-
-save_message(
-    message=Message(
-        user_id=user_1,
-        chat_id=chat_2.chat_id,
-        role="user",
-        content="پیام مربوط به گفتگوی دوم",
-        created_at=datetime.now(),
-    ),
-)
-
-
 # ==========================================
 # User 2
 # ==========================================
@@ -80,19 +52,68 @@ save_chat(
     chat=chat_3,
 )
 
+
+# ==========================================
+# Save Messages
+# ==========================================
+
+message_1 = Message(
+    user_id=user_1,
+    chat_id=chat_1.chat_id,
+    role="user",
+    content="پیام اول کاربر",
+    created_at=datetime.now(),
+)
+
 save_message(
-    message=Message(
-        user_id=user_2,
-        chat_id=chat_3.chat_id,
-        role="user",
-        content="پیام مربوط به کاربر دوم",
-        created_at=datetime.now(),
-    ),
+    message=message_1,
+)
+
+sleep(1)
+
+message_2 = Message(
+    user_id=user_1,
+    chat_id=chat_1.chat_id,
+    role="assistant",
+    content="پاسخ اول دستیار",
+    created_at=datetime.now(),
+)
+
+save_message(
+    message=message_2,
+)
+
+sleep(1)
+
+message_3 = Message(
+    user_id=user_1,
+    chat_id=chat_2.chat_id,
+    role="user",
+    content="پیام مربوط به گفتگوی دوم",
+    created_at=datetime.now(),
+)
+
+save_message(
+    message=message_3,
+)
+
+sleep(1)
+
+message_4 = Message(
+    user_id=user_2,
+    chat_id=chat_3.chat_id,
+    role="user",
+    content="پیام مربوط به کاربر دوم",
+    created_at=datetime.now(),
+)
+
+save_message(
+    message=message_4,
 )
 
 
 # ==========================================
-# Test Chat 1
+# Test Recent Messages
 # ==========================================
 
 messages: list[Message] = get_recent_messages(
@@ -101,52 +122,85 @@ messages: list[Message] = get_recent_messages(
     limit=5,
 )
 
-print("\nChat 1:")
+print("\nRecent Messages - Chat 1:")
 
 for message in messages:
     print(
-        f"[{message.created_at}] "
-        f"{message.role}: "
-        f"{message.content}"
+        message.role,
+        "|",
+        message.created_at,
+        "|",
+        message.content,
     )
 
 
 # ==========================================
-# Test Chat 2
+# Test All Chat Messages
 # ==========================================
 
-messages = get_recent_messages(
+messages = get_chat_messages(
     user_id=user_1,
-    chat_id=chat_2.chat_id,
-    limit=5,
+    chat_id=chat_1.chat_id,
 )
 
-print("\nChat 2:")
+print("\nAll Messages - Chat 1:")
 
 for message in messages:
     print(
-        f"[{message.created_at}] "
-        f"{message.role}: "
-        f"{message.content}"
+        message.role,
+        "|",
+        message.created_at,
+        "|",
+        message.content,
     )
 
 
 # ==========================================
-# Test Chat 3
+# Test User Chats
 # ==========================================
 
-messages = get_recent_messages(
+chats = get_user_chats(
+    user_id=user_1,
+)
+
+print("\nUser 1 Chats:")
+
+for chat in chats:
+    print(
+        chat.title,
+        "|",
+        chat.updated_at,
+    )
+
+
+# ==========================================
+# Test User Isolation
+# ==========================================
+
+chats = get_user_chats(
     user_id=user_2,
-    chat_id=chat_3.chat_id,
-    limit=5,
 )
 
-print("\nChat 3:")
+print("\nUser 2 Chats:")
 
-for message in messages:
+for chat in chats:
     print(
-        f"[{message.created_at}] "
-        f"{message.role}: "
-        f"{message.content}"
+        chat.title,
+        "|",
+        chat.updated_at,
     )
 
+
+# ==========================================
+# Test Chat Update
+# ==========================================
+
+print("\nChat 1 Updated At:")
+
+for chat in get_user_chats(user_id=user_1):
+    if chat.chat_id == chat_1.chat_id:
+        print(
+            chat.title,
+            "|",
+            chat.updated_at,
+        )

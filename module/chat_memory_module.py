@@ -92,10 +92,59 @@ def save_chat(
         )
 
 
+def update_chat(
+    chat: Chat,
+) -> None:
+    """بروزرسانی یک Chat در فایل حافظه"""
+
+    if not os.path.exists(path=MEMORY_FILE_PATH):
+        return
+
+    with open(
+        file=MEMORY_FILE_PATH,
+        mode="r",
+        encoding="utf-8",
+    ) as file:
+        memory: dict[str, list[dict[str, str]]] = json.load(file)
+
+    chat_data: dict[str, str] = {
+        "chat_id": chat.chat_id,
+        "user_id": chat.user_id,
+        "title": chat.title,
+        "created_at": chat.created_at.isoformat(),
+        "updated_at": chat.updated_at.isoformat(),
+    }
+
+    existing_chat = next(
+        (
+            item
+            for item in memory["chats"]
+            if item["chat_id"] == chat.chat_id
+            and item["user_id"] == chat.user_id
+        ),
+        None,
+    )
+
+    if existing_chat:
+        existing_chat.update(chat_data)
+
+    with open(
+        file=MEMORY_FILE_PATH,
+        mode="w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            memory,
+            file,
+            ensure_ascii=False,
+            indent=4,
+        )
+
+
 def save_message(
     message: Message,
 ) -> None:
-    """ذخیره یک Message در فایل حافظه"""
+    """ذخیره یک Message و بروزرسانی زمان آخرین تغییر Chat"""
 
     os.makedirs(
         name=os.path.dirname(MEMORY_FILE_PATH),
@@ -124,6 +173,19 @@ def save_message(
     }
 
     memory["messages"].append(message_data)
+
+    existing_chat = next(
+        (
+            chat
+            for chat in memory["chats"]
+            if chat["chat_id"] == message.chat_id
+            and chat["user_id"] == message.user_id
+        ),
+        None,
+    )
+
+    if existing_chat:
+        existing_chat["updated_at"] = message.created_at.isoformat()
 
     with open(
         file=MEMORY_FILE_PATH,
@@ -173,3 +235,74 @@ def get_recent_messages(
     )
 
     return messages[-limit:]
+
+
+def get_user_chats(
+    user_id: str,
+) -> list[Chat]:
+    """دریافت لیست Chatهای یک کاربر بر اساس آخرین بروزرسانی"""
+
+    if not os.path.exists(path=MEMORY_FILE_PATH):
+        return []
+
+    with open(
+        file=MEMORY_FILE_PATH,
+        mode="r",
+        encoding="utf-8",
+    ) as file:
+        memory: dict[str, list[dict[str, str]]] = json.load(file)
+
+    chats: list[Chat] = [
+        Chat(
+            chat_id=chat["chat_id"],
+            user_id=chat["user_id"],
+            title=chat["title"],
+            created_at=datetime.fromisoformat(chat["created_at"]),
+            updated_at=datetime.fromisoformat(chat["updated_at"]),
+        )
+        for chat in memory["chats"]
+        if chat["user_id"] == user_id
+    ]
+
+    chats.sort(
+        key=lambda chat: chat.updated_at,
+        reverse=True,
+    )
+
+    return chats
+
+
+def get_chat_messages(
+    user_id: str,
+    chat_id: str,
+) -> list[Message]:
+    """دریافت تمام پیام‌های یک Chat بر اساس تاریخ"""
+
+    if not os.path.exists(path=MEMORY_FILE_PATH):
+        return []
+
+    with open(
+        file=MEMORY_FILE_PATH,
+        mode="r",
+        encoding="utf-8",
+    ) as file:
+        memory: dict[str, list[dict[str, str]]] = json.load(file)
+
+    messages: list[Message] = [
+        Message(
+            user_id=message["user_id"],
+            chat_id=message["chat_id"],
+            role=message["role"],
+            content=message["content"],
+            created_at=datetime.fromisoformat(message["created_at"]),
+        )
+        for message in memory["messages"]
+        if message["user_id"] == user_id
+        and message["chat_id"] == chat_id
+    ]
+
+    messages.sort(
+        key=lambda message: message.created_at,
+    )
+
+    return messages
