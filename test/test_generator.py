@@ -1,9 +1,20 @@
 from module.generator_module import generate_answer
 
-query: str = "سلام، خودت را معرفی کن."
 
-answer: str = generate_answer(
-    query=query,
-)
+def test_memory_context() -> None:
+    context = """
+user: اسم من علی است و برنامه‌نویس هستم.
+user: اسم من چیست؟
+""".strip()
 
-print(answer)
+    answer = generate_answer(
+        context,
+    )
+
+    print()
+    print("Context test:")
+    print(answer)
+
+
+if __name__ == "__main__":
+    test_memory_context()

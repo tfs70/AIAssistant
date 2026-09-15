@@ -45,6 +45,12 @@ def send_message(
         context += f"{message.role}: {message.content}\n"
 
     context += f"user: {request.message}"
+    
+    print()
+    print("===== CONTEXT =====")
+    print(context)
+    print("===================")
+    print()
 
     answer: str = generate_answer(
         context,
