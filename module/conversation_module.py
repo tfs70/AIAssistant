@@ -7,6 +7,7 @@ from module.chat_memory_module import (
     save_chat,
     save_message,
 )
+from module.context_module import build_context
 from module.conversation_model import (
     ConversationRequest,
     ConversationResponse,
@@ -39,18 +40,10 @@ def send_message(
         limit=5,
     )
 
-    context: str = ""
-
-    for message in messages:
-        context += f"{message.role}: {message.content}\n"
-
-    context += f"user: {request.message}"
-    
-    print()
-    print("===== CONTEXT =====")
-    print(context)
-    print("===================")
-    print()
+    context: str = build_context(
+        messages=messages,
+        current_message=request.message,
+    )
 
     answer: str = generate_answer(
         context,
@@ -86,4 +79,3 @@ def send_message(
         chat_id=chat_id,
         message=answer,
     )
-

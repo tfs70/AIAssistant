@@ -16,7 +16,18 @@ deactivate
 
 
 
-<!-- ollama serve
+<!-- 
+
+ollama serve
 ollama list
 ollama pull gemma3:1b
-python -m test.test_real_multi_conversation -->
+
+
+
+python -m test.test_real_multi_conversation 
+python -m test.test_context 
+
+
+-->
+
+

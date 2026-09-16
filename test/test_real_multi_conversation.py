@@ -41,6 +41,32 @@ def test_real_conversation() -> None:
     print("Message 1")
     print(f"User: {request_1.message}")
     print(f"Assistant: {response_1.message}")
+    
+    
+    messages = get_chat_messages(
+        user_id=user_id,
+        chat_id=chat_id,
+    )
+
+    context = ""
+
+    for message in messages:
+        context += f"{message.role}: {message.content}\n"
+
+    context += "user: اسم من چیست؟"
+
+    print()
+    print("===== DIRECT CONTEXT TEST =====")
+    print(context)
+    print("===============================")
+
+    direct_answer = generate_answer(
+        context,
+    )
+
+    print()
+    print("Direct Generator Answer:")
+    print(direct_answer)
 
     # -------------------------------------------------
     # Message 2
