@@ -12,6 +12,7 @@ from module.conversation_model import (
     ConversationRequest,
     ConversationResponse,
 )
+from module.long_memory_module import get_user_facts
 from module.message_model import Message
 
 
@@ -20,6 +21,10 @@ def send_message(
     generate_answer: Callable[[str], str],
 ) -> ConversationResponse:
     """مدیریت یک پیام در Conversation"""
+
+    # -------------------------------------------------
+    # Chat
+    # -------------------------------------------------
 
     chat_id: str = request.chat_id
 
@@ -34,34 +39,61 @@ def send_message(
 
         chat_id = chat.chat_id
 
+    # -------------------------------------------------
+    # Short Memory
+    # -------------------------------------------------
+
     messages: list[Message] = get_recent_messages(
         user_id=request.user_id,
         chat_id=chat_id,
         limit=5,
     )
 
+    # -------------------------------------------------
+    # Long Memory
+    # -------------------------------------------------
+
+    facts = get_user_facts(
+        user_id=request.user_id,
+    )
+
+    # -------------------------------------------------
+    # Context
+    # -------------------------------------------------
+
     context: str = build_context(
         messages=messages,
+        facts=facts,
         current_message=request.message,
     )
+
+    # -------------------------------------------------
+    # Generator
+    # -------------------------------------------------
 
     answer: str = generate_answer(
         context,
     )
 
-    now: datetime = datetime.now()
+    # -------------------------------------------------
+    # Save User Message
+    # -------------------------------------------------
 
     user_message = Message(
         user_id=request.user_id,
         chat_id=chat_id,
         role="user",
         content=request.message,
-        created_at=now,
+        created_at=datetime.now(),
     )
 
     save_message(
         message=user_message,
     )
+
+    # -------------------------------------------------
+    # Save Assistant Message
+    # -------------------------------------------------
 
     assistant_message = Message(
         user_id=request.user_id,
@@ -74,6 +106,10 @@ def send_message(
     save_message(
         message=assistant_message,
     )
+
+    # -------------------------------------------------
+    # Response
+    # -------------------------------------------------
 
     return ConversationResponse(
         chat_id=chat_id,
