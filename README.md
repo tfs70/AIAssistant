@@ -26,7 +26,10 @@ ollama pull gemma3:1b
 
 python -m test.test_real_multi_conversation 
 python -m test.test_context 
-
+python -m test.test_real_long_memory_conversation
+python -m test.test_fact_extractor
+python -m test.test_real_full_conversation
+python -m test.test_long_memory_multi_user
 
 -->
 

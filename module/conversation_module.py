@@ -12,7 +12,11 @@ from module.conversation_model import (
     ConversationRequest,
     ConversationResponse,
 )
-from module.long_memory_module import get_user_facts
+from module.fact_extractor_module import extract_facts
+from module.long_memory_module import (
+    get_user_facts,
+    save_fact,
+)
 from module.message_model import Message
 
 
@@ -38,6 +42,20 @@ def send_message(
         )
 
         chat_id = chat.chat_id
+
+    # -------------------------------------------------
+    # Fact Extractor
+    # -------------------------------------------------
+
+    facts = extract_facts(
+        user_id=request.user_id,
+        message=request.message,
+    )
+
+    for fact in facts:
+        save_fact(
+            fact=fact,
+        )
 
     # -------------------------------------------------
     # Short Memory
