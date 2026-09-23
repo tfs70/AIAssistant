@@ -25,6 +25,7 @@ ollama pull qwen3-embedding:0.6b
 
 
 
+
 python -m test.test_real_multi_conversation 
 python -m test.test_context 
 python -m test.test_real_long_memory_conversation
@@ -34,6 +35,9 @@ python -m test.test_long_memory_multi_user
 python -m test.test_embedding
 python -m test.test_embedding_multiple
 python -m test.test_embedding_similarity
+python -m test.test_rag
+python -m test.test_rag_retrieval
+python -m test.test_context_with_rag
 
 -->
 

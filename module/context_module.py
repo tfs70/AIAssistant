@@ -1,3 +1,5 @@
+from langchain_core.documents import Document
+
 from module.message_model import Message
 from module.user_fact_model import UserFact
 
@@ -5,6 +7,7 @@ from module.user_fact_model import UserFact
 def build_context(
     messages: list[Message],
     facts: list[UserFact],
+    rag_documents: list[Document],
     current_message: str,
 ) -> str:
     """ساخت Context برای Generator"""
@@ -32,6 +35,18 @@ def build_context(
 
         for message in messages:
             context += f"{message.role}: {message.content}\n"
+
+        context += "\n"
+
+    # -------------------------------------------------
+    # RAG
+    # -------------------------------------------------
+
+    if rag_documents:
+        context += "relevant documents:\n"
+
+        for document in rag_documents:
+            context += f"{document.page_content}\n"
 
         context += "\n"
 
