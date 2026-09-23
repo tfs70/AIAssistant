@@ -4,6 +4,9 @@ langchain-ollama
 ollama
 chromadb
 langchain-chroma
+langchain-community 
+langchain-text-splitters
+
 
 
 # chromadb
