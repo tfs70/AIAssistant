@@ -8,6 +8,6 @@ class Chat:
 
     chat_id: str
     user_id: str
-    title: str
+    title: str 
     created_at: datetime
     updated_at: datetime
