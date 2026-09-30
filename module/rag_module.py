@@ -1,11 +1,10 @@
-import os
-
 from typing import Final
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaEmbeddings
 
 from module.embedding_module import EMBEDDING_MODEL_NAME
 
@@ -48,14 +47,11 @@ def split_documents(
     return chunks
 
 
-def get_or_build_vector_store(
-    chunks: list[Document],
+def create_vector_store(
     collection_name: str = COLLECTION_NAME,
     persist_directory: str = PERSIST_DIRECTORY,
 ) -> Chroma:
-    """Get or build vector store"""
-
-    from langchain_ollama import OllamaEmbeddings
+    """Create or open Chroma vector store"""
 
     embedding = OllamaEmbeddings(
         model=EMBEDDING_MODEL_NAME,
@@ -67,24 +63,72 @@ def get_or_build_vector_store(
         persist_directory=persist_directory,
     )
 
-    if len(chunks) > 0:
-        vector_store.add_documents(
-            documents=chunks,
-        )
+    return vector_store
+
+
+def add_documents(
+    documents: list[Document],
+    vector_store: Chroma,
+) -> None:
+    """Add documents to vector store"""
+
+    if not documents:
+        return
+
+    vector_store.add_documents(
+        documents=documents,
+    )
+
+
+def build_vector_store(
+    file_path: str,
+    collection_name: str = COLLECTION_NAME,
+    persist_directory: str = PERSIST_DIRECTORY,
+) -> Chroma:
+    """Load, split and store documents"""
+
+    documents: list[Document] = load_text_file(
+        file_path=file_path,
+    )
+
+    chunks: list[Document] = split_documents(
+        documents=documents,
+    )
+
+    vector_store = create_vector_store(
+        collection_name=collection_name,
+        persist_directory=persist_directory,
+    )
+
+    add_documents(
+        documents=chunks,
+        vector_store=vector_store,
+    )
 
     return vector_store
 
 
 def retrieve_context(
     query: str,
-    vector_store: Chroma,
     k: int = 3,
-) -> list[Document]:
-    """Retrieve relevant documents"""
+    collection_name: str = COLLECTION_NAME,
+    persist_directory: str = PERSIST_DIRECTORY,
+) -> str:
+    """Retrieve relevant context"""
+
+    vector_store = create_vector_store(
+        collection_name=collection_name,
+        persist_directory=persist_directory,
+    )
 
     results: list[Document] = vector_store.similarity_search(
         query=query,
         k=k,
     )
 
-    return results
+    context: str = "\n\n".join(
+        result.page_content
+        for result in results
+    )
+
+    return context

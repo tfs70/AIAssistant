@@ -39,6 +39,8 @@ python -m test.test_embedding_similarity
 python -m test.test_rag
 python -m test.test_rag_retrieval
 python -m test.test_context_with_rag
+python -m test.test_real_full_conversation_with_rag
+
 
 -->
 

@@ -1,5 +1,3 @@
-from langchain_core.documents import Document
-
 from module.message_model import Message
 from module.user_fact_model import UserFact
 
@@ -7,53 +5,62 @@ from module.user_fact_model import UserFact
 def build_context(
     messages: list[Message],
     facts: list[UserFact],
-    rag_documents: list[Document],
+    rag_context: str,
     current_message: str,
 ) -> str:
-    """ساخت Context برای Generator"""
+    """ساخت Context نهایی برای Generator"""
 
-    context: str = ""
+    sections: list[str] = []
 
     # -------------------------------------------------
     # Long Memory
     # -------------------------------------------------
 
     if facts:
-        context += "user facts:\n"
+        fact_lines: list[str] = [
+            f"{fact.key}: {fact.value}"
+            for fact in facts
+        ]
 
-        for fact in facts:
-            context += f"{fact.key}: {fact.value}\n"
+        sections.append(
+            "===== LONG MEMORY =====\n"
+            + "\n".join(fact_lines)
+        )
 
-        context += "\n"
+    # -------------------------------------------------
+    # RAG
+    # -------------------------------------------------
+
+    if rag_context.strip():
+        sections.append(
+            "===== RAG CONTEXT =====\n"
+            + rag_context.strip()
+        )
 
     # -------------------------------------------------
     # Short Memory
     # -------------------------------------------------
 
     if messages:
-        context += "conversation:\n"
+        conversation_lines: list[str] = []
 
         for message in messages:
-            context += f"{message.role}: {message.content}\n"
+            conversation_lines.append(
+                f"{message.role}: {message.content}"
+            )
 
-        context += "\n"
-
-    # -------------------------------------------------
-    # RAG
-    # -------------------------------------------------
-
-    if rag_documents:
-        context += "relevant documents:\n"
-
-        for document in rag_documents:
-            context += f"{document.page_content}\n"
-
-        context += "\n"
+        sections.append(
+            "===== CONVERSATION =====\n"
+            + "\n".join(conversation_lines)
+        )
 
     # -------------------------------------------------
     # Current Message
     # -------------------------------------------------
 
-    context += f"user: {current_message}"
+    sections.append(
+        "===== CURRENT MESSAGE =====\n"
+        + current_message
+    )
 
-    return context
+    return "\n\n".join(sections)
