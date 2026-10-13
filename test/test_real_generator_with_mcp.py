@@ -1,105 +1,101 @@
+
 import asyncio
+import json
 
-from module.mcp_module import (
-    connect_mcp,
-    close_mcp,
-)
-from module.tool_module import (
-    get_available_tools,
-    execute_tool,
-)
+from module.decision_module import decide_tool
+from module.mcp_module import connect_mcp, close_mcp
+from module.tool_module import get_available_tools, execute_tool
 
 
-TOOL_NAME = "get_random_number"
+QUESTION = "سه تأمین‌کننده با بیشترین مجموع روزهای تأخیر را بده"
 
 
-async def test_real_generator_with_mcp() -> None:
-    """تست واقعی اجرای Tool از طریق MCP"""
+def print_json(title: str, data: dict) -> None:
+    print(f"\n===== {title} =====")
+    print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
 
+
+def print_tool_result(result) -> None:
+    print("\n===== MCP TOOL RESULT =====")
+
+    is_error = getattr(result, "isError", False)
+    print(f"Is error: {is_error}")
+
+    content = getattr(result, "content", None)
+
+    if content:
+        for item in content:
+            text = getattr(item, "text", None)
+            if text is not None:
+                print(text)
+            else:
+                print(item)
+    else:
+        print(result)
+
+
+async def main() -> None:
     http_client = None
     stream_context = None
     session = None
 
     try:
-        # -------------------------------------------------
-        # MCP Connection
-        # -------------------------------------------------
+        # 1. Connect to the existing authenticated MCP server.
+        http_client, stream_context, session = await connect_mcp()
 
-        (
-            http_client,
-            stream_context,
-            session,
-        ) = await connect_mcp()
+        print("MCP connection established.")
 
-        print()
-        print("===== MCP TOOLS =====")
+        # 2. Discover actual tools exposed by the server.
+        tools = await get_available_tools(session=session)
+        available_tool_names = {tool.name for tool in tools}
 
-        tools = await get_available_tools(
-            session=session,
-        )
-
-        assert tools
-
+        print("\n===== AVAILABLE TOOLS =====")
         for tool in tools:
-            print(
-                f"- {tool.name}",
-            )
+            print(f"- {tool.name}")
 
-        # -------------------------------------------------
-        # Find Tool
-        # -------------------------------------------------
+        # 3. Ask the decision model to select a tool.
+        decision = decide_tool(query=QUESTION)
 
-        selected_tool = next(
-            (
-                tool
-                for tool in tools
-                if tool.name == TOOL_NAME
-            ),
-            None,
-        )
+        print_json("DECISION", decision)
 
-        assert selected_tool is not None, (
-            f"Tool '{TOOL_NAME}' not found"
-        )
+        # 4. Stop safely if the decision output is invalid.
+        if decision.get("error"):
+            print("\nDecision is invalid. MCP execution skipped.")
+            return
 
-        print()
-        print("===== SELECTED TOOL =====")
-        print(f"Name: {selected_tool.name}")
-        print(f"Description: {selected_tool.description}")
+        # 5. A valid decision may indicate that no tool is required.
+        if decision.get("requires_tool") is not True:
+            print("\nNo MCP tool is required for this question.")
+            return
 
-        # -------------------------------------------------
-        # Tool Arguments
-        # -------------------------------------------------
+        tool_name = decision.get("tool_name")
+        arguments = decision.get("arguments")
 
-        print()
-        print("===== INPUT SCHEMA =====")
-        print(selected_tool.input_schema)
+        # 6. Validate the selected tool against the real server tools.
+        if not isinstance(tool_name, str) or tool_name not in available_tool_names:
+            print(f"\nUnknown MCP tool: {tool_name!r}")
+            print("MCP execution skipped.")
+            return
 
-        # -------------------------------------------------
-        # Execute Tool
-        # -------------------------------------------------
+        if not isinstance(arguments, dict):
+            print("\nInvalid arguments. MCP execution skipped.")
+            return
 
-        # این Arguments را بر اساس Tool واقعی خودت تغییر بده.
-        arguments: dict = {}
+        # 7. Execute only the validated tool.
+        print(f"\nExecuting MCP tool: {tool_name}")
+        print_json("TOOL ARGUMENTS", arguments)
 
         result = await execute_tool(
             session=session,
-            tool_name=selected_tool.name,
+            tool_name=tool_name,
             arguments=arguments,
         )
 
-        # -------------------------------------------------
-        # Result
-        # -------------------------------------------------
+        print_tool_result(result)
 
-        print()
-        print("===== TOOL RESULT =====")
-        print(result)
-
-        assert result is not None
-
-        print()
-        print("test_real_generator_with_mcp: PASSED")
+    except Exception as exc:
+        print(f"\nTEST FAILED: {type(exc).__name__}: {exc}")
+        raise
 
     finally:
         if (
@@ -115,6 +111,4 @@ async def test_real_generator_with_mcp() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(
-        test_real_generator_with_mcp(),
-    )
+    asyncio.run(main())

@@ -1,5 +1,6 @@
+
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Any, Optional
 
 from module.chat_memory_module import (
     create_chat,
@@ -26,22 +27,39 @@ from module.message_model import Message
 from module.rag_module import retrieve_context
 
 
+ToolExecutor = Callable[[str], Optional[str]]
+
+
 def send_message(
     request: ConversationRequest,
     generate_answer: Callable[[str], str],
     use_rag: bool = True,
+    tool_executor: Optional[ToolExecutor] = None,
 ) -> ConversationResponse:
-    """مدیریت کامل یک پیام در Conversation"""
+    """مدیریت یک پیام در Conversation."""
 
     # =================================================
-    # 1. Chat
+    # Validate Request
+    # =================================================
+
+    if not request.user_id:
+        raise ValueError("user_id is required.")
+
+    if not request.message or not request.message.strip():
+        raise ValueError("message cannot be empty.")
+
+    user_id: str = request.user_id
+    user_text: str = request.message.strip()
+
+    # =================================================
+    # Chat
     # =================================================
 
     chat_id: str = request.chat_id
 
     if not chat_id:
         chat = create_chat(
-            user_id=request.user_id,
+            user_id=user_id,
         )
 
         save_chat(
@@ -51,71 +69,112 @@ def send_message(
         chat_id = chat.chat_id
 
     # =================================================
-    # 2. Short Memory
+    # Short Memory
     # =================================================
 
     messages: list[Message] = get_recent_messages(
-        user_id=request.user_id,
+        user_id=user_id,
         chat_id=chat_id,
         limit=5,
     )
 
     # =================================================
-    # 3. Fact Extraction
+    # Fact Extraction
     # =================================================
 
+    # حفظ حقایق باید در خود extract_facts انجام شود.
+    # اگر این تابع فقط حقایق استخراج‌شده را برگرداند،
+    # باید آن‌ها را طبق API واقعی long_memory_module ذخیره کنیم.
     extract_facts(
-        user_id=request.user_id,
-        message=request.message,
+        user_id=user_id,
+        message=user_text,
     )
 
     # =================================================
-    # 4. Long Memory
+    # Long Memory
     # =================================================
 
     facts = get_user_facts(
-        user_id=request.user_id,
+        user_id=user_id,
     )
 
     # =================================================
-    # 5. RAG
+    # RAG
     # =================================================
 
     rag_context: str = ""
 
     if use_rag:
         rag_context = retrieve_context(
-            query=request.message,
+            query=user_text,
         )
 
     # =================================================
-    # 6. Context Builder
+    # Base Context
     # =================================================
 
     context: str = build_context(
         messages=messages,
         facts=facts,
         rag_context=rag_context,
-        current_message=request.message,
+        current_message=user_text,
     )
 
     # =================================================
-    # 7. Generator
+    # Optional MCP Tool
+    # =================================================
+
+    tool_result: Optional[str] = None
+
+    if tool_executor is not None:
+        # قرارداد این تابع:
+        # - ابزار لازم نیست: None برگرداند.
+        # - ابزار اجرا شد: نتیجه را به شکل str برگرداند.
+        # - خطا رخ داد: exception را پنهان نکند.
+        tool_result = tool_executor(
+            user_text,
+        )
+
+    # =================================================
+    # Final Context
+    # =================================================
+
+    final_context: str = context
+
+    if tool_result is not None:
+        final_context += (
+            "\n\n===== TRUSTED ERP TOOL RESULT =====\n"
+            f"{tool_result}\n\n"
+            "قوانین استفاده از نتیجه ERP:\n"
+            "- پاسخ را بر اساس نتیجه واقعی ابزار بنویس.\n"
+            "- نام‌ها، اعداد و مقادیر نتیجه را تغییر نده.\n"
+            "- داده‌ای را که ابزار برنگردانده است، نساز.\n"
+            "- اگر نتیجه برای پاسخ کافی نیست، این موضوع را بیان کن.\n"
+            "- پاسخ نهایی باید فارسی باشد."
+        )
+
+    # =================================================
+    # Generator
     # =================================================
 
     answer: str = generate_answer(
-        context,
+        final_context,
     )
 
+    if not isinstance(answer, str) or not answer.strip():
+        raise ValueError("Generator returned an empty answer.")
+
+    answer = answer.strip()
+
     # =================================================
-    # 8. Save User Message
+    # Save User Message
     # =================================================
 
     user_message = Message(
-        user_id=request.user_id,
+        user_id=user_id,
         chat_id=chat_id,
         role="user",
-        content=request.message,
+        content=user_text,
         created_at=datetime.now(),
     )
 
@@ -124,11 +183,11 @@ def send_message(
     )
 
     # =================================================
-    # 9. Save Assistant Message
+    # Save Assistant Message
     # =================================================
 
     assistant_message = Message(
-        user_id=request.user_id,
+        user_id=user_id,
         chat_id=chat_id,
         role="assistant",
         content=answer,
@@ -140,11 +199,11 @@ def send_message(
     )
 
     # =================================================
-    # 10. Update Chat
+    # Update Chat
     # =================================================
 
     chats = get_user_chats(
-        user_id=request.user_id,
+        user_id=user_id,
     )
 
     current_chat = next(
@@ -156,7 +215,7 @@ def send_message(
         None,
     )
 
-    if current_chat:
+    if current_chat is not None:
         current_chat.updated_at = datetime.now()
 
         update_chat(
@@ -164,7 +223,7 @@ def send_message(
         )
 
     # =================================================
-    # 11. Response
+    # Response
     # =================================================
 
     return ConversationResponse(
