@@ -59,8 +59,9 @@ def _validate_decision(
     if not isinstance(arguments, dict):
         raise ValueError("Tool arguments must be a dictionary.")
 
+
     tool = available_tools[tool_name]
-    schema = getattr(tool, "inputSchema", {}) or {}
+    schema = getattr(tool, "input_schema", {}) or {}
 
     properties = schema.get("properties", {})
     required = schema.get("required", [])
@@ -85,6 +86,23 @@ def _validate_decision(
             f"{missing_arguments}"
         )
 
+    unknown_arguments = set(arguments) - set(properties)
+    if unknown_arguments:
+        raise ValueError(
+            f"Unknown arguments for {tool_name}: "
+            f"{sorted(unknown_arguments)}"
+        )
+
+    missing_arguments = [
+        name for name in required
+        if name not in arguments
+    ]
+    if missing_arguments:
+        raise ValueError(
+            f"Missing required arguments for {tool_name}: "
+            f"{missing_arguments}"
+        )
+
     if (
         tool_name == "get_vendor_purchase_share"
         and not arguments.get("vendorNames")
@@ -94,7 +112,6 @@ def _validate_decision(
         )
 
     return tool_name, arguments
-
 
 def _format_tool_result(result: Any) -> str:
     """Convert MCP content into readable text for the generator."""
@@ -134,11 +151,26 @@ def _format_tool_result(result: Any) -> str:
 async def _execute_mcp_for_question(
     question: str,
 ) -> str | None:
+    """Decide whether an ERP tool is needed and execute it if required."""
+
+    # Step 1: Decide before connecting to MCP.
+    decision = decide_tool(query=question)
+
+    if decision.get("error"):
+        raise ValueError(
+            f"Invalid tool decision: {decision['error']}"
+        )
+
+    # No MCP connection is needed for ordinary questions.
+    if decision.get("requires_tool") is not True:
+        return None
+
     http_client = None
     stream_context = None
     session: ClientSession | None = None
 
     try:
+        # Step 2: Connect only when an ERP tool is required.
         http_client, stream_context, session = await connect_mcp()
 
         tools = await get_available_tools(session=session)
@@ -148,8 +180,7 @@ async def _execute_mcp_for_question(
             for tool in tools
         }
 
-        decision = decide_tool(query=question)
-
+        # Step 3: Validate the decision against actual MCP tools.
         validated = _validate_decision(
             decision=decision,
             available_tools=available_tools,
@@ -160,15 +191,18 @@ async def _execute_mcp_for_question(
 
         tool_name, arguments = validated
 
+        # Step 4: Execute the selected tool.
         result = await execute_tool(
             session=session,
             tool_name=tool_name,
             arguments=arguments,
         )
 
+        # Step 5: Return the real result for the final answer.
         return (
             f"Tool: {tool_name}\n"
-            f"Arguments: {json.dumps(arguments, ensure_ascii=False)}\n"
+            f"Arguments: "
+            f"{json.dumps(arguments, ensure_ascii=False)}\n"
             f"Result:\n{_format_tool_result(result)}"
         )
 
@@ -183,7 +217,7 @@ async def _execute_mcp_for_question(
                 stream_context=stream_context,
                 session=session,
             )
-
+            
 
 def execute_mcp_for_question(
     question: str,

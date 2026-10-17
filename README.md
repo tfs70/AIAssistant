@@ -46,7 +46,7 @@ python -m test.test_real_mcp_server
 python -m test.test_tool_selection_benchmark
 python -m test.test_real_generator_with_mcp
 python -m test.test_real_generator_with_mcp
-
+python -m test.test_real_conversation_with_mcp
 
 -->
 
