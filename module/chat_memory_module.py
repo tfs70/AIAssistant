@@ -306,3 +306,66 @@ def get_chat_messages(
     )
 
     return messages
+
+
+
+def delete_chat(
+    user_id: str,
+    chat_id: str,
+) -> bool:
+    """حذف یک گفتگو و پیام‌های آن فقط برای کاربر مالک."""
+
+    if not os.path.exists(MEMORY_FILE_PATH):
+        return False
+
+    with open(
+        file=MEMORY_FILE_PATH,
+        mode="r",
+        encoding="utf-8",
+    ) as file:
+        data = json.load(file)
+
+    chats = data.get("chats", [])
+    messages = data.get("messages", [])
+
+    # جلوگیری از حذف گفتگوی متعلق به کاربر دیگر
+    owned_chat_exists = any(
+        chat.get("user_id") == user_id
+        and chat.get("chat_id") == chat_id
+        for chat in chats
+    )
+
+    if not owned_chat_exists:
+        return False
+
+    data["chats"] = [
+        chat
+        for chat in chats
+        if not (
+            chat.get("user_id") == user_id
+            and chat.get("chat_id") == chat_id
+        )
+    ]
+
+    data["messages"] = [
+        message
+        for message in messages
+        if not (
+            message.get("user_id") == user_id
+            and message.get("chat_id") == chat_id
+        )
+    ]
+
+    with open(
+        file=MEMORY_FILE_PATH,
+        mode="w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=4,
+        )
+
+    return True

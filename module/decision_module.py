@@ -148,6 +148,8 @@ def decide_tool(
     model = OllamaLLM(
         model=selected_model,
         temperature=0,
+        format="json",
+        num_predict=256,
     )
 
     response = model.invoke(prompt)
@@ -204,6 +206,11 @@ def decide_tool(
         }
 
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        print("\n===== DECISION RAW RESPONSE =====")
+        print(repr(response))
+        print("===== DECISION ERROR =====")
+        print(repr(exc))
+
         return {
             "requires_tool": False,
             "tool_name": None,

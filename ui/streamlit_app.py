@@ -1,10 +1,11 @@
 import os
 from datetime import datetime
-
+import traceback
 import streamlit as st
 
 from module.chat_memory_module import (
     create_chat,
+    delete_chat,
     get_chat_messages,
     get_user_chats,
     save_chat,
@@ -23,7 +24,7 @@ from module.mcp_tool_executor_module import execute_mcp_for_question
 APP_TITLE = "Persis AI Assistant"
 
 # فقط برای اجرای محلی و آزمایشی است؛ احراز هویت واقعی نیست.
-USER_ID = os.getenv(
+DEFAULT_USER_ID = os.getenv(
     "AIASSISTANT_USER_ID",
     "streamlit_local_user",
 )
@@ -41,6 +42,11 @@ st.set_page_config(
     page_icon="🤖",
     layout="wide",
 )
+
+if "active_user_id" not in st.session_state:
+    st.session_state.active_user_id = DEFAULT_USER_ID
+
+USER_ID = st.session_state.active_user_id
 
 st.title("🤖 Persis AI Assistant")
 st.caption("دستیار هوشمند متصل به سیستم ERP")
@@ -138,6 +144,13 @@ def render_chat_history(chat_id: str) -> None:
 # Session state initialization
 # ---------------------------------------------------------
 
+# با تغییر کاربر، چت انتخاب‌شده کاربر قبلی نباید باقی بماند.
+if st.session_state.get("selected_chat_user_id") != USER_ID:
+    st.session_state.selected_chat_user_id = USER_ID
+
+    st.session_state.pop("selected_chat_id", None)
+    st.session_state.pending_delete_chat_id = None
+
 if "selected_chat_id" not in st.session_state:
     chats = load_user_chats()
 
@@ -150,12 +163,42 @@ if "selected_chat_id" not in st.session_state:
 if "use_rag" not in st.session_state:
     st.session_state.use_rag = DEFAULT_USE_RAG
 
+if "pending_delete_chat_id" not in st.session_state:
+    st.session_state.pending_delete_chat_id = None 
+
 
 # ---------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------
 
 with st.sidebar:
+
+    st.header("کاربر آزمایشی")
+
+    with st.form("switch_user_form"):
+        requested_user_id = st.text_input(
+            "User ID",
+            value=USER_ID,
+            help=(
+                "شناسه کاربر برای آزمایش جداسازی چت‌ها. "
+                "این فیلد جایگزین احراز هویت واقعی نیست."
+            ),
+        ).strip()
+
+        switch_user = st.form_submit_button(
+            "تغییر کاربر",
+            use_container_width=True,
+        )
+
+    if switch_user:
+        if not requested_user_id:
+            st.error("شناسه کاربر نمی‌تواند خالی باشد.")
+        elif requested_user_id != USER_ID:
+            st.session_state.active_user_id = requested_user_id
+            st.rerun()
+
+    st.divider()
+
     st.header("گفتگوها")
 
     if st.button(
@@ -185,6 +228,7 @@ with st.sidebar:
     if not chats:
         st.caption("هنوز گفتگویی وجود ندارد.")
 
+    
     for chat in chats:
         is_selected = (
             chat.chat_id == st.session_state.selected_chat_id
@@ -196,13 +240,85 @@ with st.sidebar:
             else chat.title
         )
 
-        if st.button(
-            button_label,
-            key=f"chat_{chat.chat_id}",
-            use_container_width=True,
+        chat_col, delete_col = st.columns(
+            [0.84, 0.16],
+            gap="small",
+        )
+
+        with chat_col:
+            if st.button(
+                button_label,
+                key=f"chat_{chat.chat_id}",
+                use_container_width=True,
+            ):
+                st.session_state.selected_chat_id = chat.chat_id
+                st.session_state.pending_delete_chat_id = None
+                st.rerun()
+
+        with delete_col:
+            if st.button(
+                "🗑️",
+                key=f"delete_chat_{chat.chat_id}",
+                help="حذف این گفتگو",
+                use_container_width=True,
+            ):
+                st.session_state.pending_delete_chat_id = chat.chat_id
+                st.rerun()
+
+        # تأیید حذف فقط برای گفتگوی انتخاب‌شده جهت حذف
+        if (
+            st.session_state.pending_delete_chat_id
+            == chat.chat_id
         ):
-            st.session_state.selected_chat_id = chat.chat_id
-            st.rerun()
+            st.warning(f"گفتگوی «{chat.title}» حذف شود؟")
+
+            confirm_col, cancel_col = st.columns(2)
+
+            with confirm_col:
+                if st.button(
+                    "حذف گفتگو",
+                    key=f"confirm_delete_{chat.chat_id}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    deleted = delete_chat(
+                        user_id=USER_ID,
+                        chat_id=chat.chat_id,
+                    )
+
+                    st.session_state.pending_delete_chat_id = None
+
+                    if deleted:
+                        if (
+                            st.session_state.selected_chat_id
+                            == chat.chat_id
+                        ):
+                            remaining_chats = load_user_chats()
+
+                            if remaining_chats:
+                                st.session_state.selected_chat_id = (
+                                    remaining_chats[0].chat_id
+                                )
+                            else:
+                                st.session_state.selected_chat_id = (
+                                    create_new_chat()
+                                )
+
+                        st.rerun()
+                    else:
+                        st.error(
+                            "گفتگو پیدا نشد یا اجازه حذف آن را نداری."
+                        )
+
+            with cancel_col:
+                if st.button(
+                    "انصراف",
+                    key=f"cancel_delete_{chat.chat_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_delete_chat_id = None
+                    st.rerun()
+
 
 
 # ---------------------------------------------------------
@@ -265,11 +381,12 @@ if user_message and user_message.strip():
     except Exception as exc:
         st.error(
             "در پردازش پیام خطایی رخ داد. "
-            "وضعیت Ollama، اتصال MCP و لاگ ترمینال را بررسی کن."
+            "جزئیات خطا در ترمینال ثبت شده است."
         )
 
-        # جزئیات فقط در کنسول محلی ثبت می‌شود.
         print(
             f"[Streamlit Chat Error] "
             f"chat_id={chat_id}, error={exc!r}"
         )
+
+        traceback.print_exc()

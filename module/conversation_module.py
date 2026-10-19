@@ -1,6 +1,8 @@
 
+import re
+import time
 from datetime import datetime
-from typing import Callable, Any, Optional
+from typing import Callable, Optional
 
 from module.chat_memory_module import (
     create_chat,
@@ -10,24 +12,51 @@ from module.chat_memory_module import (
     save_message,
     update_chat,
 )
-
 from module.context_module import build_context
-
-from module.conversation_model import (
-    ConversationRequest,
-    ConversationResponse,
-)
-
+from module.conversation_model import ConversationRequest, ConversationResponse
 from module.fact_extractor_module import extract_facts
-
-from module.long_memory_module import get_user_facts
-
+from module.long_memory_module import get_user_facts, save_fact
 from module.message_model import Message
-
 from module.rag_module import retrieve_context
 
 
 ToolExecutor = Callable[[str], Optional[str]]
+
+
+def _may_contain_personal_fact(message: str) -> bool:
+    """تشخیص اولیه پیام‌هایی که ممکن است اطلاعات شخصی جدید داشته باشند."""
+
+    text = message.strip()
+
+    personal_markers = (
+        "اسم من",
+        "نام من",
+        "شغل من",
+        "کار من",
+        "من اسمم",
+        "من نامم",
+        "من اهل",
+        "من متولد",
+        "من کار می‌کنم",
+        "من کار میکنم",
+        "من هستم",
+        "من برنامه‌نویس",
+        "من برنامه نویس",
+        "من متولد",
+        "من در"
+    )
+
+    if any(marker in text for marker in personal_markers):
+        return True
+
+    # مثال: «من علی ام» یا «من علی‌ام»
+    if re.search(r"من\s+\S+\s+(?:ام|هستم)", text):
+        return True
+
+    if re.search(r"من\s+\S+‌ام", text):
+        return True
+
+    return False
 
 
 def send_message(
@@ -36,11 +65,10 @@ def send_message(
     use_rag: bool = True,
     tool_executor: Optional[ToolExecutor] = None,
 ) -> ConversationResponse:
-    """مدیریت یک پیام در Conversation."""
+    """پردازش پیام با حافظه، RAG و ابزار اختیاری ERP."""
 
-    # =================================================
-    # Validate Request
-    # =================================================
+    total_started = time.perf_counter()
+    timings: dict[str, float] = {}
 
     if not request.user_id:
         raise ValueError("user_id is required.")
@@ -48,98 +76,75 @@ def send_message(
     if not request.message or not request.message.strip():
         raise ValueError("message cannot be empty.")
 
-    user_id: str = request.user_id
-    user_text: str = request.message.strip()
-
-    # =================================================
-    # Chat
-    # =================================================
-
-    chat_id: str = request.chat_id
+    user_id = request.user_id
+    user_text = request.message.strip()
+    chat_id = request.chat_id
 
     if not chat_id:
-        chat = create_chat(
-            user_id=user_id,
-        )
-
-        save_chat(
-            chat=chat,
-        )
-
+        chat = create_chat(user_id=user_id)
+        save_chat(chat=chat)
         chat_id = chat.chat_id
 
-    # =================================================
-    # Short Memory
-    # =================================================
+    # 1. استخراج و ذخیره اطلاعات شخصی، فقط در صورت نیاز
+    stage_started = time.perf_counter()
 
-    messages: list[Message] = get_recent_messages(
+    if _may_contain_personal_fact(user_text):
+        extracted_facts = extract_facts(
+            user_id=user_id,
+            message=user_text,
+        )
+
+        for fact in extracted_facts:
+            save_fact(fact=fact)
+
+    timings["fact_extraction_and_save"] = (
+        time.perf_counter() - stage_started
+    )
+
+    # 2. دریافت حافظه کوتاه‌مدت و بلندمدت
+    stage_started = time.perf_counter()
+
+    messages = get_recent_messages(
         user_id=user_id,
         chat_id=chat_id,
         limit=5,
     )
 
-    # =================================================
-    # Fact Extraction
-    # =================================================
+    facts = get_user_facts(user_id=user_id)
 
-    # حفظ حقایق باید در خود extract_facts انجام شود.
-    # اگر این تابع فقط حقایق استخراج‌شده را برگرداند،
-    # باید آن‌ها را طبق API واقعی long_memory_module ذخیره کنیم.
-    extract_facts(
-        user_id=user_id,
-        message=user_text,
-    )
+    timings["memory_retrieval"] = time.perf_counter() - stage_started
 
-    # =================================================
-    # Long Memory
-    # =================================================
+    # 3. بازیابی اسناد RAG
+    stage_started = time.perf_counter()
 
-    facts = get_user_facts(
-        user_id=user_id,
-    )
-
-    # =================================================
-    # RAG
-    # =================================================
-
-    rag_context: str = ""
+    rag_context = ""
 
     if use_rag:
-        rag_context = retrieve_context(
-            query=user_text,
-        )
+        rag_context = retrieve_context(query=user_text)
 
-    # =================================================
-    # Base Context
-    # =================================================
+    timings["rag_retrieval"] = time.perf_counter() - stage_started
 
-    context: str = build_context(
+    # 4. ساخت Context
+    context = build_context(
         messages=messages,
         facts=facts,
         rag_context=rag_context,
         current_message=user_text,
     )
 
-    # =================================================
-    # Optional MCP Tool
-    # =================================================
+    # 5. تصمیم‌گیری و اجرای ابزار ERP در صورت نیاز
+    stage_started = time.perf_counter()
 
-    tool_result: Optional[str] = None
+    tool_result = None
 
     if tool_executor is not None:
-        # قرارداد این تابع:
-        # - ابزار لازم نیست: None برگرداند.
-        # - ابزار اجرا شد: نتیجه را به شکل str برگرداند.
-        # - خطا رخ داد: exception را پنهان نکند.
-        tool_result = tool_executor(
-            user_text,
-        )
+        tool_result = tool_executor(user_text)
 
-    # =================================================
-    # Final Context
-    # =================================================
+    timings["tool_routing_and_execution"] = (
+        time.perf_counter() - stage_started
+    )
 
-    final_context: str = context
+    final_context = context
 
     if tool_result is not None:
         final_context += (
@@ -153,80 +158,76 @@ def send_message(
             "- پاسخ نهایی باید فارسی باشد."
         )
 
-    # =================================================
-    # Generator
-    # =================================================
+    # 6. تولید پاسخ
+    stage_started = time.perf_counter()
 
-    answer: str = generate_answer(
-        final_context,
-    )
+    answer = generate_answer(final_context)
+
+    timings["answer_generation"] = time.perf_counter() - stage_started
 
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("Generator returned an empty answer.")
 
     answer = answer.strip()
 
-    # =================================================
-    # Save User Message
-    # =================================================
+    total_seconds = time.perf_counter() - total_started
+
+    # ثبت زمان واقعی در متن ذخیره‌شده، تا در تاریخچه هم دیده شود.
+    answer_with_timing = (
+        f"{answer}\n\n"
+        f"---\n"
+        f"⏱️ زمان پاسخ: {total_seconds:.2f} ثانیه"
+    )
+
+    # 7. ذخیره پیام‌ها
+    now = datetime.now()
 
     user_message = Message(
         user_id=user_id,
         chat_id=chat_id,
         role="user",
         content=user_text,
-        created_at=datetime.now(),
+        created_at=now,
     )
-
-    save_message(
-        message=user_message,
-    )
-
-    # =================================================
-    # Save Assistant Message
-    # =================================================
+    save_message(message=user_message)
 
     assistant_message = Message(
         user_id=user_id,
         chat_id=chat_id,
         role="assistant",
-        content=answer,
+        content=answer_with_timing,
         created_at=datetime.now(),
     )
+    save_message(message=assistant_message)
 
-    save_message(
-        message=assistant_message,
-    )
-
-    # =================================================
-    # Update Chat
-    # =================================================
-
-    chats = get_user_chats(
-        user_id=user_id,
-    )
+    chats = get_user_chats(user_id=user_id)
 
     current_chat = next(
-        (
-            chat
-            for chat in chats
-            if chat.chat_id == chat_id
-        ),
+        (chat for chat in chats if chat.chat_id == chat_id),
         None,
     )
 
     if current_chat is not None:
         current_chat.updated_at = datetime.now()
+        update_chat(chat=current_chat)
 
-        update_chat(
-            chat=current_chat,
-        )
-
-    # =================================================
-    # Response
-    # =================================================
+    # 8. لاگ زمان مراحل
+    print(
+        "\n===== CONVERSATION TIMINGS =====\n"
+        f"Fact extraction/save: "
+        f"{timings['fact_extraction_and_save']:.2f}s\n"
+        f"Memory retrieval: "
+        f"{timings['memory_retrieval']:.2f}s\n"
+        f"RAG retrieval: "
+        f"{timings['rag_retrieval']:.2f}s\n"
+        f"Tool routing/execution: "
+        f"{timings['tool_routing_and_execution']:.2f}s\n"
+        f"Answer generation: "
+        f"{timings['answer_generation']:.2f}s\n"
+        f"Total: {total_seconds:.2f}s\n"
+    )
 
     return ConversationResponse(
         chat_id=chat_id,
-        message=answer,
+        message=answer_with_timing,
     )

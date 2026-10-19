@@ -1,55 +1,48 @@
+
 from typing import Final
 
-from langchain_ollama import OllamaLLM
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage
+from langchain_ollama import ChatOllama
 
 
 MODEL_NAME: Final[str] = "qwen3.5:4b"
 
 TEMPLATE: Final[str] = """
-تو یک دستیار هوشمند فارسی‌زبان هستی که به سیستم ERP متصل است.
+تو یک دستیار هوشمند فارسی برای پاسخ‌گویی به سؤالات کاربران هستی.
 
-ورودی ممکن است شامل سؤال کاربر، سابقه مکالمه و نتیجه واقعی ابزارهای ERP باشد.
+قوانین:
+- پاسخ نهایی باید فارسی باشد.
+- پاسخ را مستقیم و واضح ارائه کن.
+- اطلاعاتی را که در ورودی وجود ندارد، نساز.
+- اگر اطلاعات کافی نیست، این موضوع را صریح بیان کن.
 
-قوانین قطعی:
-
-1. پاسخ نهایی را حتماً تولید کن؛ سؤال کاربر را به‌عنوان پاسخ تکرار نکن.
-2. اگر بخش TRUSTED ERP TOOL RESULT در ورودی وجود دارد،
-   از اطلاعات آن برای پاسخ به سؤال کاربر استفاده کن.
-3. نتیجه ابزار ERP منبع معتبر اطلاعات عملیاتی است.
-4. نام‌ها، شناسه‌ها و مقادیر عددی را دقیقاً مطابق نتیجه ابزار بنویس.
-5. هیچ نام، عدد، آمار یا اطلاعاتی را که در نتیجه ابزار وجود ندارد، نساز.
-6. اگر نتیجه ابزار برای پاسخ کافی نیست، صریحاً بگو اطلاعات کافی نیست.
-7. پاسخ را به زبان فارسی و متناسب با سؤال کاربر بنویس.
-8. پاسخ را مستقیم و خوانا ارائه کن؛ درباره مراحل داخلی پردازش توضیح نده.
-
-روش پاسخ‌گویی:
-- اگر کاربر فهرستی خواسته است، موارد را به‌صورت فهرست شماره‌دار ارائه کن.
-- اگر تعداد مشخصی خواسته است، همان تعداد را از داده‌های موجود ارائه کن.
-- فقط اطلاعات مرتبط با سؤال را نمایش بده.
-- اگر نتیجه ابزار موجود است، به‌جای گفتن «اطلاعات کافی ندارم»، ابتدا همان نتیجه را بررسی کن.
-
-ورودی:
+متن ورودی:
 {question}
-
-پاسخ نهایی فارسی:
-""".strip()
+"""
 
 
 def generate_answer(query: str) -> str:
-    """تولید پاسخ فارسی با استفاده از مدل محلی Ollama."""
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("Generator input must be a non-empty string.")
 
-    prompt_template = ChatPromptTemplate.from_template(
-        template=TEMPLATE
+    prompt = TEMPLATE.format(question=query)
+
+    model = ChatOllama(
+        model=MODEL_NAME,
+        temperature=0,
+        reasoning=False,
+        num_predict=512,
     )
 
-    prompt = prompt_template.format(question=query)
+    response = model.invoke(
+        [HumanMessage(content=prompt)]
+    )
 
-    model = OllamaLLM(model=MODEL_NAME)
+    answer = response.content
 
-    response = model.invoke(input=prompt)
+    if not isinstance(answer, str) or not answer.strip():
+        raise RuntimeError(
+            f"Generator model '{MODEL_NAME}' returned an empty answer."
+        )
 
-    if not isinstance(response, str) or not response.strip():
-        raise ValueError("Generator returned an empty answer.")
-
-    return response.strip()
+    return answer.strip()

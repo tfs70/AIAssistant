@@ -154,6 +154,12 @@ async def _execute_mcp_for_question(
     """Decide whether an ERP tool is needed and execute it if required."""
 
     # Step 1: Decide before connecting to MCP.
+
+    # پیام‌های عادی نباید مدل تصمیم‌گیری ERP را اجرا کنند.
+    if not _may_need_erp_tool(question):
+        return None
+
+    # فقط سؤال‌های محتمل ERP وارد مدل تصمیم‌گیری می‌شوند.
     decision = decide_tool(query=question)
 
     if decision.get("error"):
@@ -240,3 +246,39 @@ def execute_mcp_for_question(
         "execute_mcp_for_question cannot run inside an active "
         "event loop. Use the async implementation directly."
     )
+
+
+def _may_need_erp_tool(question: str) -> bool:
+    """بررسی اولیه برای حذف پیام‌های آشکارا غیر ERP."""
+
+    normalized = question.casefold()
+
+    erp_keywords = (
+        "خرید",
+        "خریداری",
+        "سفارش",
+        "تأمین",
+        "تامین",
+        "تأمین‌کننده",
+        "تامین کننده",
+        "فروشنده",
+        "کالا",
+        "محصول",
+        "برند",
+        "قرارداد",
+        "مغایرت",
+        "تأخیر",
+        "تاخیر",
+        "رسید خرید",
+        "روزهای تأخیر",
+        "روزهای تاخیر",
+        "سهم خرید",
+        "درصد خرید",
+        "حمل",
+        "erp",
+        "purchase order",
+        "supplier",
+        "vendor",
+    )
+
+    return any(keyword in normalized for keyword in erp_keywords)
