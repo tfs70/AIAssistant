@@ -26,11 +26,9 @@ APP_TITLE = "Persis AI Assistant"
 # فقط برای اجرای محلی و آزمایشی است؛ احراز هویت واقعی نیست.
 DEFAULT_USER_ID = os.getenv(
     "AIASSISTANT_USER_ID",
-    "streamlit_local_user",
+    "User_1",
 )
 
-# در صورت آماده بودن ایندکس Chroma، این گزینه را فعال کن.
-DEFAULT_USE_RAG = False
 
 
 # ---------------------------------------------------------
@@ -160,9 +158,6 @@ if "selected_chat_id" not in st.session_state:
         st.session_state.selected_chat_id = create_new_chat()
 
 
-if "use_rag" not in st.session_state:
-    st.session_state.use_rag = DEFAULT_USE_RAG
-
 if "pending_delete_chat_id" not in st.session_state:
     st.session_state.pending_delete_chat_id = None 
 
@@ -207,19 +202,6 @@ with st.sidebar:
     ):
         st.session_state.selected_chat_id = create_new_chat()
         st.rerun()
-
-    st.divider()
-
-    use_rag = st.checkbox(
-        "استفاده از RAG",
-        value=st.session_state.use_rag,
-        help=(
-            "برای پرسش‌هایی که به اسناد ایندکس‌شده نیاز دارند "
-            "این گزینه را فعال کن."
-        ),
-    )
-
-    st.session_state.use_rag = use_rag
 
     st.divider()
 
@@ -361,7 +343,7 @@ if user_message and user_message.strip():
                 response = send_message(
                     request=request,
                     generate_answer=generate_answer,
-                    use_rag=st.session_state.use_rag,
+                    use_rag=True,
                     tool_executor=execute_mcp_for_question,
                 )
 
