@@ -17,8 +17,11 @@ from module.conversation_model import ConversationRequest, ConversationResponse
 from module.fact_extractor_module import extract_facts
 from module.long_memory_module import get_user_facts, save_fact
 from module.message_model import Message
-from module.rag_module import retrieve_context
 
+from module.rag_module import (
+    retrieve_context,
+    sync_rag_documents,
+)
 
 ToolExecutor = Callable[[str], Optional[str]]
 
@@ -114,15 +117,31 @@ def send_message(
 
     timings["memory_retrieval"] = time.perf_counter() - stage_started
 
-    # 3. بازیابی اسناد RAG
+    
+    # 3. همگام‌سازی اسناد و بازیابی محتوای مرتبط RAG
     stage_started = time.perf_counter()
 
     rag_context = ""
 
     if use_rag:
-        rag_context = retrieve_context(query=user_text)
+        sync_result = sync_rag_documents()
+
+        print(
+            "\n===== RAG SYNC RESULT =====\n"
+            f"Added: {sync_result['added']}\n"
+            f"Updated: {sync_result['updated']}\n"
+            f"Skipped: {sync_result['skipped']}\n"
+            f"Deleted: {sync_result['deleted']}\n"
+        )
+
+    rag_context = retrieve_context(query=user_text)
+
+    print("\n===== RAG CONTEXT DEBUG =====")
+    print("Length:", len(rag_context))
+    print(rag_context)
 
     timings["rag_retrieval"] = time.perf_counter() - stage_started
+
 
     # 4. ساخت Context
     context = build_context(
@@ -131,6 +150,10 @@ def send_message(
         rag_context=rag_context,
         current_message=user_text,
     )
+
+    print("\n===== FINAL CONTEXT DEBUG =====")
+    print("Length:", len(context))
+    print(context)
 
     # 5. تصمیم‌گیری و اجرای ابزار ERP در صورت نیاز
     stage_started = time.perf_counter()
