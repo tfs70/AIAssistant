@@ -124,15 +124,78 @@ SYSTEM_PROMPT: Final[str] = """
 }
 """.strip()
 
+def _normalize_persian(text: str) -> str:
+    """Normalize common Persian/Arabic character variants."""
+    return (
+        text.casefold()
+        .replace("ي", "ی")
+        .replace("ك", "ک")
+        .replace("\u200c", " ")
+        .strip()
+    )
+
+
+def _rule_based_decision(
+    query: str,
+    model_name: str,
+) -> dict[str, Any] | None:
+    """Handle unambiguous ERP questions without an LLM call."""
+
+    normalized = _normalize_persian(query)
+
+    delay_terms = (
+        "تأخیر",
+        "تاخیر",
+        "دیرکرد",
+        "دیر تحویل",
+        "دیرتر تحویل",
+    )
+
+    vendor_terms = (
+        "تأمین",
+        "تامین",
+        "فروشنده",
+        "supplier",
+        "vendor",
+    )
+
+    if (
+        any(term in normalized for term in delay_terms)
+        and any(term in normalized for term in vendor_terms)
+    ):
+        return {
+            "requires_tool": True,
+            "tool_name": "get_vendors_with_highest_delivery_delay",
+            "arguments": {},
+            "confidence": 1.0,
+            "model_name": model_name,
+            "error": None,
+        }
+
+    return None
 
 def decide_tool(
     query: str,
     model_name: str | None = None,
 ) -> dict[str, Any]:
-    """انتخاب ابزار ERP بدون اجرای آن."""
+    """Select an ERP tool using deterministic rules first, then an LLM."""
 
     selected_model = model_name or MODEL_NAME
 
+    # Step 1: Handle unambiguous questions deterministically.
+    rule_decision = _rule_based_decision(
+        query=query,
+        model_name=selected_model,
+    )
+
+    if rule_decision is not None:
+        print(
+            "[DECISION] Rule-based selection: "
+            f"{rule_decision['tool_name']}"
+        )
+        return rule_decision
+
+    # Step 2: Use the existing LLM decision logic for other questions.
     prompt = f"""
 {SYSTEM_PROMPT}
 
@@ -145,78 +208,4 @@ def decide_tool(
 تصمیم JSON:
 """.strip()
 
-    model = OllamaLLM(
-        model=selected_model,
-        temperature=0,
-        format="json",
-        num_predict=256,
-    )
-
-    response = model.invoke(prompt)
-
-    try:
-        text = str(response).strip()
-
-        # در صورت اضافه کردن متن قبل از JSON، اولین شیء JSON را استخراج کن.
-        start = text.find("{")
-        if start == -1:
-            raise ValueError("JSON object not found")
-
-        result, _ = json.JSONDecoder().raw_decode(text[start:])
-
-        if not isinstance(result, dict):
-            raise ValueError("Decision must be a JSON object")
-
-        requires_tool = result.get("requires_tool")
-        tool_name = result.get("tool_name")
-        arguments = result.get("arguments")
-        confidence = result.get("confidence", 0.0)
-
-        if not isinstance(requires_tool, bool):
-            raise ValueError("requires_tool must be boolean")
-
-        if not isinstance(arguments, dict):
-            raise ValueError("arguments must be an object")
-
-        if not isinstance(confidence, (int, float)):
-            raise ValueError("confidence must be numeric")
-
-        if requires_tool:
-            if tool_name not in TOOL_NAMES:
-                raise ValueError(f"Unknown tool: {tool_name}")
-
-            if (
-                tool_name == "get_vendor_purchase_share"
-                and not arguments.get("vendorNames")
-            ):
-                raise ValueError(
-                    "vendorNames is required for get_vendor_purchase_share"
-                )
-        else:
-            tool_name = None
-            arguments = {}
-
-        return {
-            "requires_tool": requires_tool,
-            "tool_name": tool_name,
-            "arguments": arguments,
-            "confidence": max(0.0, min(1.0, float(confidence))),
-            "model_name": selected_model,
-            "error": None,
-        }
-
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        print("\n===== DECISION RAW RESPONSE =====")
-        print(repr(response))
-        print("===== DECISION ERROR =====")
-        print(repr(exc))
-
-        return {
-            "requires_tool": False,
-            "tool_name": None,
-            "arguments": {},
-            "confidence": 0.0,
-            "model_name": selected_model,
-            "error": f"Invalid decision output: {exc}",
-            "raw_response": str(response),
-        }
+    # ادامه کد فعلی از اینجا
