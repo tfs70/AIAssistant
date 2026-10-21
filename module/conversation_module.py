@@ -19,25 +19,37 @@ from module.fact_extractor_module import extract_facts
 from module.long_memory_module import get_user_facts, save_fact
 from module.message_model import Message
 from module.mcp_tool_executor_module import route_and_execute_question
-from module.rag_module import retrieve_context, sync_rag_documents
+from module.rag_module import (
+    create_vector_store,
+    retrieve_context,
+    sync_rag_documents,
+)
 
 
 RouteExecutor = Callable[[str], dict[str, Any]]
 
+VALID_ROUTES = {"chat", "tool", "rag", "tool_and_rag"}
 
-def _may_contain_personal_fact(message: str) -> bool:
-    """تشخیص اولیه پیام‌هایی که ممکن است اطلاعات شخصی جدید داشته باشند."""
+# آستانه اولیه و قابل تنظیم برای تشخیص ارتباط سؤال با اسناد.
+# این مقدار باید با آزمون پرسش‌های واقعی تنظیم شود.
+RAG_FALLBACK_THRESHOLD = 0.24
 
-    text = message.strip()
+
+def _normalize_persian(text: str) -> str:
+    """یکسان‌سازی حروف رایج عربی و فارسی."""
+    return (
+        text.replace("ي", "ی")
+        .replace("ك", "ک")
+        .replace("\u200c", "‌")
+        .strip()
+    )
 
 
 def _may_contain_personal_fact(message: str) -> bool:
     """تشخیص پیام‌های حاوی اطلاعات شخصی جدید، نه سؤال درباره حافظه."""
 
-    text = message.strip()
-    normalized = text.replace("ي", "ی").replace("ك", "ک")
+    normalized = _normalize_persian(message)
 
-    # سؤال درباره اطلاعات قبلی نباید وارد استخراج یا ذخیره Fact شود.
     question_patterns = (
         "اسم من چیه",
         "نام من چیه",
@@ -63,8 +75,6 @@ def _may_contain_personal_fact(message: str) -> bool:
     if any(pattern in normalized for pattern in question_patterns):
         return False
 
-    # علامت سؤال همراه با سؤال درباره هویت یا شغل،
-    # نباید به‌عنوان اطلاعات جدید تلقی شود.
     if "؟" in normalized or "?" in normalized:
         question_markers = (
             "اسم من",
@@ -167,6 +177,55 @@ def _build_trusted_data_context(
     return "\n\n".join(sections)
 
 
+def _should_fallback_to_rag(
+    user_text: str,
+) -> tuple[bool, float]:
+    """
+    بررسی عمومی ارتباط سؤال با اسناد، وقتی مدل مسیر chat را انتخاب کرده است.
+
+    خروجی:
+        (is_relevant, best_score)
+
+    در صورت بروز خطا، بررسی ناموفق تلقی می‌شود و مکالمه ادامه می‌یابد.
+    """
+
+    try:
+        vector_store = create_vector_store()
+
+        matches = vector_store.similarity_search_with_relevance_scores(
+            user_text,
+            k=3,
+        )
+
+        if not matches:
+            print("[RAG FALLBACK] No document matches found.")
+            return False, -1.0
+
+        scores = [
+            float(score)
+            for _, score in matches
+            if score is not None
+        ]
+
+        if not scores:
+            print("[RAG FALLBACK] No usable relevance scores.")
+            return False, -1.0
+
+        best_score = max(scores)
+
+        print(
+            "[RAG FALLBACK] "
+            f"best_score={best_score:.4f}, "
+            f"threshold={RAG_FALLBACK_THRESHOLD:.4f}"
+        )
+
+        return best_score >= RAG_FALLBACK_THRESHOLD, best_score
+
+    except Exception as exc:
+        print(f"[RAG FALLBACK] Relevance check failed: {exc!r}")
+        return False, -1.0
+
+
 def send_message(
     request: ConversationRequest,
     generate_answer: Callable[[str], str],
@@ -265,9 +324,7 @@ def send_message(
 
     route = routing_result.get("route")
 
-    valid_routes = {"chat", "tool", "rag", "tool_and_rag"}
-
-    if route not in valid_routes:
+    if route not in VALID_ROUTES:
         raise ValueError(
             f"Invalid route returned by executor: {route!r}"
         )
@@ -281,31 +338,59 @@ def send_message(
         time.perf_counter() - stage_started
     )
 
-    # 4. بازیابی RAG فقط زمانی که مسیر انتخابی به آن نیاز دارد
+    # 4. بررسی عمومی RAG در صورت انتخاب chat توسط مدل.
+    # مسیرهای MCP تغییر داده نمی‌شوند.
+    rag_fallback_used = False
+
+    if use_rag and route == "chat":
+        is_relevant, best_score = _should_fallback_to_rag(user_text)
+
+        if is_relevant:
+            route = "rag"
+            routing_result["route"] = "rag"
+            routing_result["rag_query"] = user_text
+            rag_fallback_used = True
+
+            print(
+                "[RAG FALLBACK] Relevant document detected. "
+                "Switching route from chat to rag. "
+                f"score={best_score:.4f}"
+            )
+        else:
+            print(
+                "[RAG FALLBACK] Keeping chat route. "
+                f"best_score={best_score:.4f}"
+            )
+
+    # 5. بازیابی محتوای RAG
     stage_started = time.perf_counter()
 
     rag_context = ""
     rag_used = use_rag and route in {"rag", "tool_and_rag"}
 
     if rag_used:
-        sync_result = sync_rag_documents()
+        try:
+            sync_result = sync_rag_documents()
 
-        print(
-            "\n===== RAG SYNC RESULT =====\n"
-            f"Added: {sync_result['added']}\n"
-            f"Updated: {sync_result['updated']}\n"
-            f"Skipped: {sync_result['skipped']}\n"
-            f"Deleted: {sync_result['deleted']}\n"
-        )
+            print(
+                "\n===== RAG SYNC RESULT =====\n"
+                f"Added: {sync_result.get('added', 0)}\n"
+                f"Updated: {sync_result.get('updated', 0)}\n"
+                f"Skipped: {sync_result.get('skipped', 0)}\n"
+                f"Deleted: {sync_result.get('deleted', 0)}\n"
+            )
 
-        rag_query = routing_result.get("rag_query") or user_text
-        rag_context = retrieve_context(query=rag_query)
+            rag_query = routing_result.get("rag_query") or user_text
+            rag_context = retrieve_context(query=rag_query) or ""
 
-    timings["rag_retrieval"] = (
-        time.perf_counter() - stage_started
-    )
+        except Exception as exc:
+            # خطای RAG نباید باعث از دست رفتن کل مکالمه شود.
+            print(f"[RAG] Retrieval/sync failed: {exc!r}")
+            rag_context = ""
 
-    # 5. ساخت زمینه مکالمه
+    timings["rag_retrieval"] = time.perf_counter() - stage_started
+
+    # 6. ساخت زمینه مکالمه
     context = build_context(
         messages=messages,
         facts=facts,
@@ -321,7 +406,7 @@ def send_message(
 
     final_context = f"{context}\n\n{trusted_context}"
 
-    # 6. تولید پاسخ
+    # 7. تولید پاسخ
     stage_started = time.perf_counter()
 
     answer = generate_answer(final_context)
@@ -342,7 +427,7 @@ def send_message(
         f"⏱️ زمان پاسخ: {total_seconds:.2f} ثانیه"
     )
 
-    # 7. ذخیره پیام‌ها
+    # 8. ذخیره پیام‌ها
     now = datetime.now()
 
     save_message(
@@ -376,11 +461,12 @@ def send_message(
         current_chat.updated_at = datetime.now()
         update_chat(chat=current_chat)
 
-    # 8. ثبت زمان مراحل
+    # 9. ثبت زمان مراحل
     print(
         "\n===== CONVERSATION TIMINGS =====\n"
         f"Route: {route}\n"
         f"RAG enabled for this request: {rag_used}\n"
+        f"RAG fallback used: {rag_fallback_used}\n"
         f"Fact extraction/save: "
         f"{timings['fact_extraction_and_save']:.2f}s\n"
         f"Memory retrieval: "
