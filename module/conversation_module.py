@@ -1,8 +1,9 @@
 
+import json
 import re
 import time
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from module.chat_memory_module import (
     create_chat,
@@ -17,13 +18,11 @@ from module.conversation_model import ConversationRequest, ConversationResponse
 from module.fact_extractor_module import extract_facts
 from module.long_memory_module import get_user_facts, save_fact
 from module.message_model import Message
+from module.mcp_tool_executor_module import route_and_execute_question
+from module.rag_module import retrieve_context, sync_rag_documents
 
-from module.rag_module import (
-    retrieve_context,
-    sync_rag_documents,
-)
 
-ToolExecutor = Callable[[str], Optional[str]]
+RouteExecutor = Callable[[str], dict[str, Any]]
 
 
 def _may_contain_personal_fact(message: str) -> bool:
@@ -45,14 +44,12 @@ def _may_contain_personal_fact(message: str) -> bool:
         "من هستم",
         "من برنامه‌نویس",
         "من برنامه نویس",
-        "من متولد",
-        "من در"
+        "من در",
     )
 
     if any(marker in text for marker in personal_markers):
         return True
 
-    # مثال: «من علی ام» یا «من علی‌ام»
     if re.search(r"من\s+\S+\s+(?:ام|هستم)", text):
         return True
 
@@ -62,13 +59,69 @@ def _may_contain_personal_fact(message: str) -> bool:
     return False
 
 
+def _format_tool_results(tool_results: list[dict[str, Any]]) -> str:
+    """تبدیل نتایج ساختاریافته ابزارها به متنی قابل استفاده برای مدل پاسخ‌گو."""
+
+    if not tool_results:
+        return ""
+
+    return json.dumps(
+        tool_results,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+
+
+def _build_trusted_data_context(
+    route: str,
+    tool_results: list[dict[str, Any]],
+    rag_context: str,
+) -> str:
+    """ساخت بخش داده‌های معتبر، متناسب با مسیر تصمیم‌گیری."""
+
+    sections: list[str] = []
+
+    if tool_results:
+        sections.append(
+            "===== TRUSTED ERP TOOL RESULTS =====\n"
+            f"{_format_tool_results(tool_results)}\n\n"
+            "قوانین استفاده از نتایج ابزار:\n"
+            "- داده‌ها را فقط بر اساس خروجی واقعی ابزار گزارش کن.\n"
+            "- نام‌ها، شناسه‌ها، اعداد و مقادیر خروجی را تغییر نده.\n"
+            "- اگر ابزار خطا داده است، خطا را به‌عنوان داده واقعی معرفی نکن.\n"
+            "- اگر نتیجه کافی نیست، محدودیت را صریح بیان کن.\n"
+            "- بین خرید واقعی، سفارش خرید و سایر مفاهیم تمایز بگذار."
+        )
+
+    if rag_context.strip():
+        sections.append(
+            "===== RETRIEVED DOCUMENT CONTEXT =====\n"
+            f"{rag_context}\n\n"
+            "قوانین استفاده از اسناد:\n"
+            "- فقط اطلاعات مرتبط با سؤال را از اسناد استفاده کن.\n"
+            "- اطلاعات نامرتبط را وارد پاسخ نکن.\n"
+            "- محتوای بازیابی‌شده را با نتیجه ابزار ERP اشتباه نگیر.\n"
+            "- اگر اسناد پاسخ را پشتیبانی نمی‌کنند، این موضوع را بیان کن."
+        )
+
+    sections.append(
+        "===== RESPONSE RULES =====\n"
+        f"Selected route: {route}\n"
+        "- پاسخ نهایی باید فارسی و مستقیم باشد.\n"
+        "- برای اطلاعاتی که در منابع موجود نیستند، چیزی نساز."
+    )
+
+    return "\n\n".join(sections)
+
+
 def send_message(
     request: ConversationRequest,
     generate_answer: Callable[[str], str],
     use_rag: bool = True,
-    tool_executor: Optional[ToolExecutor] = None,
+    tool_executor: Optional[RouteExecutor] = None,
 ) -> ConversationResponse:
-    """پردازش پیام با حافظه، RAG و ابزار اختیاری ERP."""
+    """پردازش پیام با حافظه، تصمیم‌گیری، MCP، RAG و تولید پاسخ."""
 
     total_started = time.perf_counter()
     timings: dict[str, float] = {}
@@ -88,7 +141,7 @@ def send_message(
         save_chat(chat=chat)
         chat_id = chat.chat_id
 
-    # 1. استخراج و ذخیره اطلاعات شخصی، فقط در صورت نیاز
+    # 1. استخراج و ذخیره اطلاعات شخصی
     stage_started = time.perf_counter()
 
     if _may_contain_personal_fact(user_text):
@@ -112,18 +165,44 @@ def send_message(
         chat_id=chat_id,
         limit=5,
     )
-
     facts = get_user_facts(user_id=user_id)
 
     timings["memory_retrieval"] = time.perf_counter() - stage_started
 
-    
-    # 3. همگام‌سازی اسناد و بازیابی محتوای مرتبط RAG
+    # 3. تصمیم‌گیری و اجرای ابزارها
+    stage_started = time.perf_counter()
+
+    executor = tool_executor or route_and_execute_question
+    routing_result = executor(user_text)
+
+    if not isinstance(routing_result, dict):
+        raise TypeError(
+            "Route executor must return a dictionary containing "
+            "'route', 'rag_query' and 'tool_results'. "
+            "Pass route_and_execute_question, not execute_mcp_for_question."
+        )
+
+    route = routing_result.get("route")
+
+    valid_routes = {"chat", "tool", "rag", "tool_and_rag"}
+    if route not in valid_routes:
+        raise ValueError(f"Invalid route returned by executor: {route!r}")
+
+    tool_results = routing_result.get("tool_results", [])
+    if not isinstance(tool_results, list):
+        raise TypeError("tool_results must be a list.")
+
+    timings["tool_routing_and_execution"] = (
+        time.perf_counter() - stage_started
+    )
+
+    # 4. بازیابی RAG فقط زمانی که مسیر انتخابی به آن نیاز دارد
     stage_started = time.perf_counter()
 
     rag_context = ""
+    rag_used = use_rag and route in {"rag", "tool_and_rag"}
 
-    if use_rag:
+    if rag_used:
         sync_result = sync_rag_documents()
 
         print(
@@ -134,16 +213,12 @@ def send_message(
             f"Deleted: {sync_result['deleted']}\n"
         )
 
-    rag_context = retrieve_context(query=user_text)
-
-    print("\n===== RAG CONTEXT DEBUG =====")
-    print("Length:", len(rag_context))
-    print(rag_context)
+        rag_query = routing_result.get("rag_query") or user_text
+        rag_context = retrieve_context(query=rag_query)
 
     timings["rag_retrieval"] = time.perf_counter() - stage_started
 
-
-    # 4. ساخت Context
+    # 5. ساخت زمینه مکالمه
     context = build_context(
         messages=messages,
         facts=facts,
@@ -151,35 +226,13 @@ def send_message(
         current_message=user_text,
     )
 
-    print("\n===== FINAL CONTEXT DEBUG =====")
-    print("Length:", len(context))
-    print(context)
-
-    # 5. تصمیم‌گیری و اجرای ابزار ERP در صورت نیاز
-    stage_started = time.perf_counter()
-
-    tool_result = None
-
-    if tool_executor is not None:
-        tool_result = tool_executor(user_text)
-
-    timings["tool_routing_and_execution"] = (
-        time.perf_counter() - stage_started
+    trusted_context = _build_trusted_data_context(
+        route=route,
+        tool_results=tool_results,
+        rag_context=rag_context,
     )
 
-    final_context = context
-
-    if tool_result is not None:
-        final_context += (
-            "\n\n===== TRUSTED ERP TOOL RESULT =====\n"
-            f"{tool_result}\n\n"
-            "قوانین استفاده از نتیجه ERP:\n"
-            "- پاسخ را بر اساس نتیجه واقعی ابزار بنویس.\n"
-            "- نام‌ها، اعداد و مقادیر نتیجه را تغییر نده.\n"
-            "- داده‌ای را که ابزار برنگردانده است، نساز.\n"
-            "- اگر نتیجه برای پاسخ کافی نیست، این موضوع را بیان کن.\n"
-            "- پاسخ نهایی باید فارسی باشد."
-        )
+    final_context = f"{context}\n\n{trusted_context}"
 
     # 6. تولید پاسخ
     stage_started = time.perf_counter()
@@ -192,10 +245,8 @@ def send_message(
         raise ValueError("Generator returned an empty answer.")
 
     answer = answer.strip()
-
     total_seconds = time.perf_counter() - total_started
 
-    # ثبت زمان واقعی در متن ذخیره‌شده، تا در تاریخچه هم دیده شود.
     answer_with_timing = (
         f"{answer}\n\n"
         f"---\n"
@@ -205,26 +256,27 @@ def send_message(
     # 7. ذخیره پیام‌ها
     now = datetime.now()
 
-    user_message = Message(
-        user_id=user_id,
-        chat_id=chat_id,
-        role="user",
-        content=user_text,
-        created_at=now,
+    save_message(
+        message=Message(
+            user_id=user_id,
+            chat_id=chat_id,
+            role="user",
+            content=user_text,
+            created_at=now,
+        )
     )
-    save_message(message=user_message)
 
-    assistant_message = Message(
-        user_id=user_id,
-        chat_id=chat_id,
-        role="assistant",
-        content=answer_with_timing,
-        created_at=datetime.now(),
+    save_message(
+        message=Message(
+            user_id=user_id,
+            chat_id=chat_id,
+            role="assistant",
+            content=answer_with_timing,
+            created_at=datetime.now(),
+        )
     )
-    save_message(message=assistant_message)
 
     chats = get_user_chats(user_id=user_id)
-
     current_chat = next(
         (chat for chat in chats if chat.chat_id == chat_id),
         None,
@@ -234,19 +286,18 @@ def send_message(
         current_chat.updated_at = datetime.now()
         update_chat(chat=current_chat)
 
-    # 8. لاگ زمان مراحل
+    # 8. ثبت زمان مراحل
     print(
         "\n===== CONVERSATION TIMINGS =====\n"
+        f"Route: {route}\n"
+        f"RAG enabled for this request: {rag_used}\n"
         f"Fact extraction/save: "
         f"{timings['fact_extraction_and_save']:.2f}s\n"
-        f"Memory retrieval: "
-        f"{timings['memory_retrieval']:.2f}s\n"
-        f"RAG retrieval: "
-        f"{timings['rag_retrieval']:.2f}s\n"
+        f"Memory retrieval: {timings['memory_retrieval']:.2f}s\n"
         f"Tool routing/execution: "
         f"{timings['tool_routing_and_execution']:.2f}s\n"
-        f"Answer generation: "
-        f"{timings['answer_generation']:.2f}s\n"
+        f"RAG retrieval: {timings['rag_retrieval']:.2f}s\n"
+        f"Answer generation: {timings['answer_generation']:.2f}s\n"
         f"Total: {total_seconds:.2f}s\n"
     )
 

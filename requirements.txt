@@ -9,7 +9,7 @@ langchain-text-splitters
 mcp
 pypdf
 python-docx
-
+pytest
 
 # chromadb
 # langchain-chroma
