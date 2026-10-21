@@ -48,6 +48,30 @@ python -m test.test_real_generator_with_mcp
 python -m test.test_real_generator_with_mcp
 python -m test.test_real_conversation_with_mcp
 
+
+python -m streamlit run ui/streamlit_app.py   
 -->
 
 
+
+
+## پاک‌سازی حافظه‌های تستی، بدون حذف Vector Store#
+
+Set-Location "D:\__Personal\Projects\AIAssistant"
+
+# حذف تاریخچه گفتگوها و پیام‌های ذخیره‌شده
+Remove-Item ".\data\chat_memory.json" `
+    -Force -ErrorAction SilentlyContinue
+
+# حذف واقعیت‌ها و حافظه بلندمدت کاربران آزمایشی
+Remove-Item ".\data\long_memory.json" `
+    -Force -ErrorAction SilentlyContinue
+
+# اطمینان از باقی ماندن Vector Store
+if (Test-Path ".\data\chroma_db") {
+    Write-Host "Chroma Vector Store preserved."
+} else {
+    Write-Warning "Chroma Vector Store not found!"
+}
+
+Write-Host "Chat and long-memory cleanup completed."

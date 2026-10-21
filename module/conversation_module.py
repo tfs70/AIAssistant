@@ -30,6 +30,56 @@ def _may_contain_personal_fact(message: str) -> bool:
 
     text = message.strip()
 
+
+def _may_contain_personal_fact(message: str) -> bool:
+    """تشخیص پیام‌های حاوی اطلاعات شخصی جدید، نه سؤال درباره حافظه."""
+
+    text = message.strip()
+    normalized = text.replace("ي", "ی").replace("ك", "ک")
+
+    # سؤال درباره اطلاعات قبلی نباید وارد استخراج یا ذخیره Fact شود.
+    question_patterns = (
+        "اسم من چیه",
+        "نام من چیه",
+        "اسمم چیه",
+        "نامم چیه",
+        "اسم من چیست",
+        "نام من چیست",
+        "شغل من چیه",
+        "شغلم چیه",
+        "کار من چیه",
+        "کارم چیه",
+        "شغل من چیست",
+        "شغلم چیست",
+        "من کی هستم",
+        "من چه کسی هستم",
+        "چه شغلی دارم",
+        "چی درباره من می‌دونی",
+        "چه چیزی از من می‌دونی",
+        "یادت هست اسمم چیه",
+        "یادت هست شغلم چیه",
+    )
+
+    if any(pattern in normalized for pattern in question_patterns):
+        return False
+
+    # علامت سؤال همراه با سؤال درباره هویت یا شغل،
+    # نباید به‌عنوان اطلاعات جدید تلقی شود.
+    if "؟" in normalized or "?" in normalized:
+        question_markers = (
+            "اسم من",
+            "نام من",
+            "شغل من",
+            "شغلم",
+            "اسمم",
+            "نامم",
+            "کارم",
+            "کار من",
+        )
+
+        if any(marker in normalized for marker in question_markers):
+            return False
+
     personal_markers = (
         "اسم من",
         "نام من",
@@ -47,20 +97,22 @@ def _may_contain_personal_fact(message: str) -> bool:
         "من در",
     )
 
-    if any(marker in text for marker in personal_markers):
+    if any(marker in normalized for marker in personal_markers):
         return True
 
-    if re.search(r"من\s+\S+\s+(?:ام|هستم)", text):
+    if re.search(r"من\s+\S+\s+(?:ام|هستم)", normalized):
         return True
 
-    if re.search(r"من\s+\S+‌ام", text):
+    if re.search(r"من\s+\S+‌ام", normalized):
         return True
 
     return False
 
 
-def _format_tool_results(tool_results: list[dict[str, Any]]) -> str:
-    """تبدیل نتایج ساختاریافته ابزارها به متنی قابل استفاده برای مدل پاسخ‌گو."""
+def _format_tool_results(
+    tool_results: list[dict[str, Any]],
+) -> str:
+    """تبدیل نتایج ساختاریافته ابزارها به متن."""
 
     if not tool_results:
         return ""
@@ -78,7 +130,7 @@ def _build_trusted_data_context(
     tool_results: list[dict[str, Any]],
     rag_context: str,
 ) -> str:
-    """ساخت بخش داده‌های معتبر، متناسب با مسیر تصمیم‌گیری."""
+    """ساخت زمینه داده‌های معتبر متناسب با مسیر تصمیم‌گیری."""
 
     sections: list[str] = []
 
@@ -145,13 +197,34 @@ def send_message(
     stage_started = time.perf_counter()
 
     if _may_contain_personal_fact(user_text):
-        extracted_facts = extract_facts(
-            user_id=user_id,
-            message=user_text,
-        )
+        try:
+            extracted_facts = extract_facts(
+                user_id=user_id,
+                message=user_text,
+            )
 
-        for fact in extracted_facts:
-            save_fact(fact=fact)
+            print(
+                f"[MEMORY] user_id={user_id!r}, "
+                f"extracted_facts={extracted_facts!r}"
+            )
+
+            for fact in extracted_facts:
+                # جلوگیری از ذخیره Fact متعلق به کاربر دیگر
+                if fact.user_id != user_id:
+                    print(
+                        "[MEMORY] Skipping fact with mismatched user_id: "
+                        f"{fact.user_id!r}"
+                    )
+                    continue
+
+                save_fact(fact=fact)
+
+        except Exception as exc:
+            # خطای استخراج نباید کل مکالمه را متوقف کند.
+            print(
+                f"[MEMORY] Fact extraction/save failed for "
+                f"user_id={user_id!r}: {exc!r}"
+            )
 
     timings["fact_extraction_and_save"] = (
         time.perf_counter() - stage_started
@@ -165,9 +238,17 @@ def send_message(
         chat_id=chat_id,
         limit=5,
     )
+
     facts = get_user_facts(user_id=user_id)
 
-    timings["memory_retrieval"] = time.perf_counter() - stage_started
+    print(
+        f"[MEMORY] user_id={user_id!r}, "
+        f"loaded_facts={facts!r}"
+    )
+
+    timings["memory_retrieval"] = (
+        time.perf_counter() - stage_started
+    )
 
     # 3. تصمیم‌گیری و اجرای ابزارها
     stage_started = time.perf_counter()
@@ -185,10 +266,14 @@ def send_message(
     route = routing_result.get("route")
 
     valid_routes = {"chat", "tool", "rag", "tool_and_rag"}
+
     if route not in valid_routes:
-        raise ValueError(f"Invalid route returned by executor: {route!r}")
+        raise ValueError(
+            f"Invalid route returned by executor: {route!r}"
+        )
 
     tool_results = routing_result.get("tool_results", [])
+
     if not isinstance(tool_results, list):
         raise TypeError("tool_results must be a list.")
 
@@ -216,7 +301,9 @@ def send_message(
         rag_query = routing_result.get("rag_query") or user_text
         rag_context = retrieve_context(query=rag_query)
 
-    timings["rag_retrieval"] = time.perf_counter() - stage_started
+    timings["rag_retrieval"] = (
+        time.perf_counter() - stage_started
+    )
 
     # 5. ساخت زمینه مکالمه
     context = build_context(
@@ -239,7 +326,9 @@ def send_message(
 
     answer = generate_answer(final_context)
 
-    timings["answer_generation"] = time.perf_counter() - stage_started
+    timings["answer_generation"] = (
+        time.perf_counter() - stage_started
+    )
 
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("Generator returned an empty answer.")
@@ -277,6 +366,7 @@ def send_message(
     )
 
     chats = get_user_chats(user_id=user_id)
+
     current_chat = next(
         (chat for chat in chats if chat.chat_id == chat_id),
         None,
@@ -293,11 +383,14 @@ def send_message(
         f"RAG enabled for this request: {rag_used}\n"
         f"Fact extraction/save: "
         f"{timings['fact_extraction_and_save']:.2f}s\n"
-        f"Memory retrieval: {timings['memory_retrieval']:.2f}s\n"
+        f"Memory retrieval: "
+        f"{timings['memory_retrieval']:.2f}s\n"
         f"Tool routing/execution: "
         f"{timings['tool_routing_and_execution']:.2f}s\n"
-        f"RAG retrieval: {timings['rag_retrieval']:.2f}s\n"
-        f"Answer generation: {timings['answer_generation']:.2f}s\n"
+        f"RAG retrieval: "
+        f"{timings['rag_retrieval']:.2f}s\n"
+        f"Answer generation: "
+        f"{timings['answer_generation']:.2f}s\n"
         f"Total: {total_seconds:.2f}s\n"
     )
 
