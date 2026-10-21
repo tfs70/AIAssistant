@@ -1,10 +1,14 @@
 
-import json
+import asyncio
 import os
 import time
 from typing import Any
 
-from module.decision_module import decide_tool
+from langchain_ollama import ChatOllama
+
+from module.decision_module import decide_route
+from module.mcp_module import connect_mcp, close_mcp
+from module.tool_module import get_available_tools
 
 
 QUESTIONS: list[dict[str, Any]] = [
@@ -147,97 +151,201 @@ QUESTIONS: list[dict[str, Any]] = [
 ]
 
 
-def run_benchmark() -> None:
-    model_name = os.getenv(
-        "DECISION_MODEL",
-        "qwen3.5:4b",
-    )
+def _evaluate_result(
+    result: dict[str, Any],
+    expected_tool: str | None,
+    expected_args: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate a routing result against one benchmark case."""
 
-    total = len(QUESTIONS)
-    tool_correct = 0
-    decision_correct = 0
-    args_correct = 0
-    errors = 0
-    total_seconds = 0.0
+    route = result.get("route")
+    tool_calls = result.get("tool_calls", [])
 
-    print(f"\nModel: {model_name}")
-    print(f"Questions: {total}")
-    print("=" * 80)
+    if not isinstance(tool_calls, list):
+        raise ValueError("'tool_calls' must be a list.")
 
-    for index, case in enumerate(QUESTIONS, start=1):
-        started_at = time.perf_counter()
+    actual_tool = None
+    actual_args: dict[str, Any] = {}
 
-        try:
-            result = decide_tool(
-                query=case["query"],
-                model_name=model_name,
-            )
-        except Exception as exc:
-            result = {
-                "requires_tool": False,
-                "tool_name": None,
-                "arguments": {},
-                "error": repr(exc),
-            }
+    if tool_calls:
+        first_call = tool_calls[0]
 
-        elapsed = time.perf_counter() - started_at
-        total_seconds += elapsed
+        if not isinstance(first_call, dict):
+            raise ValueError("Each tool call must be an object.")
 
-        expected_tool = case["tool"]
-        expected_args = case["args"]
+        actual_tool = first_call.get("name")
+        actual_args = first_call.get("arguments", {})
 
-        actual_tool = result.get("tool_name")
-        actual_args = result.get("arguments", {})
-        has_error = bool(result.get("error"))
+        if not isinstance(actual_args, dict):
+            raise ValueError("Tool arguments must be an object.")
 
-        expected_requires_tool = expected_tool is not None
-        actual_requires_tool = result.get("requires_tool", False)
-
+    if expected_tool is None:
+        # For non-tool questions, chat and RAG are both acceptable.
         decision_ok = (
-            actual_requires_tool == expected_requires_tool
+            route in {"chat", "rag"}
+            and not tool_calls
+            and result.get("rag_query") is not None
+            if route == "rag"
+            else route == "chat" and not tool_calls
+        )
+        tool_ok = not tool_calls
+        args_ok = tool_ok and actual_args == expected_args
+
+    else:
+        decision_ok = (
+            route in {"tool", "tool_and_rag"}
+            and len(tool_calls) == 1
             and actual_tool == expected_tool
         )
         tool_ok = actual_tool == expected_tool
-        args_ok = tool_ok and actual_args == expected_args
-
-        decision_correct += int(decision_ok)
-        tool_correct += int(tool_ok)
-        args_correct += int(args_ok)
-        errors += int(has_error)
-
-        status = (
-            "PASS"
-            if decision_ok and args_ok and not has_error
-            else "FAIL"
+        args_ok = (
+            tool_ok
+            and len(tool_calls) == 1
+            and actual_args == expected_args
         )
 
-        print(f"\n[{index:02}/{total}] {status}")
-        print(f"Question:  {case['query']}")
-        print(f"Expected:  {expected_tool}")
-        print(f"Actual:    {actual_tool}")
-        print(f"Expected arguments: {expected_args}")
-        print(f"Actual arguments:   {actual_args}")
-        print(f"Confidence: {result.get('confidence', 0.0)}")
-        print(f"Latency:    {elapsed:.2f}s")
+    return {
+        "decision_ok": decision_ok,
+        "tool_ok": tool_ok,
+        "args_ok": args_ok,
+        "actual_tool": actual_tool,
+        "actual_args": actual_args,
+    }
 
-        if has_error:
-            print(f"Error: {result['error']}")
-            if "raw_response" in result:
-                print(f"Raw response: {result['raw_response']}")
 
-    print("\n" + "=" * 80)
-    print("BENCHMARK SUMMARY")
-    print(f"Model: {model_name}")
-    print(f"Decision accuracy: {decision_correct}/{total} "
-          f"({decision_correct / total:.1%})")
-    print(f"Tool accuracy:     {tool_correct}/{total} "
-          f"({tool_correct / total:.1%})")
-    print(f"Exact args:        {args_correct}/{total} "
-          f"({args_correct / total:.1%})")
-    print(f"Invalid outputs:   {errors}/{total}")
-    print(f"Total time:        {total_seconds:.2f}s")
-    print(f"Average latency:   {total_seconds / total:.2f}s")
+async def run_benchmark() -> None:
+    model_name = os.getenv(
+        "DECISION_MODEL",
+        "qwen3.5:4b",
+    ).strip()
+
+    model = ChatOllama(
+        model=model_name,
+        temperature=0,
+        format="json",
+        reasoning=False,
+    )
+
+    http_client = None
+    stream_context = None
+    session = None
+
+    try:
+        http_client, stream_context, session = await connect_mcp()
+
+        available_tools = await get_available_tools(session=session)
+
+        if not available_tools:
+            raise RuntimeError(
+                "MCP returned an empty tool catalog."
+            )
+
+        print(f"\nModel: {model_name}")
+        print(f"Available MCP tools: {len(available_tools)}")
+        print(f"Questions: {len(QUESTIONS)}")
+        print("=" * 80)
+
+        total = len(QUESTIONS)
+        decision_correct = 0
+        tool_correct = 0
+        args_correct = 0
+        errors = 0
+        total_seconds = 0.0
+
+        for index, case in enumerate(QUESTIONS, start=1):
+            started_at = time.perf_counter()
+            error_message = None
+            result: dict[str, Any] = {}
+
+            try:
+                result = decide_route(
+                    query=case["query"],
+                    available_tools=available_tools,
+                    model=model,
+                )
+
+                evaluation = _evaluate_result(
+                    result=result,
+                    expected_tool=case["tool"],
+                    expected_args=case["args"],
+                )
+
+                decision_ok = evaluation["decision_ok"]
+                tool_ok = evaluation["tool_ok"]
+                args_ok = evaluation["args_ok"]
+
+            except Exception as exc:
+                error_message = repr(exc)
+                decision_ok = False
+                tool_ok = False
+                args_ok = False
+                evaluation = {
+                    "actual_tool": None,
+                    "actual_args": {},
+                }
+
+            elapsed = time.perf_counter() - started_at
+            total_seconds += elapsed
+
+            decision_correct += int(decision_ok)
+            tool_correct += int(tool_ok)
+            args_correct += int(args_ok)
+            errors += int(error_message is not None)
+
+            status = (
+                "PASS"
+                if decision_ok and args_ok and error_message is None
+                else "FAIL"
+            )
+
+            print(f"\n[{index:02}/{total}] {status}")
+            print(f"Question:  {case['query']}")
+            print(f"Expected route/tool: {case['tool']}")
+            print(f"Actual route:        {result.get('route')}")
+            print(f"Actual tool:         {evaluation['actual_tool']}")
+            print(f"Expected arguments:  {case['args']}")
+            print(f"Actual arguments:    {evaluation['actual_args']}")
+            print(f"Confidence:          {result.get('confidence', 0.0)}")
+            print(f"Latency:             {elapsed:.2f}s")
+
+            if error_message:
+                print(f"Error: {error_message}")
+                continue
+
+            if not args_ok:
+                print(f"Reason: {result.get('reason', '')}")
+
+        print("\n" + "=" * 80)
+        print("BENCHMARK SUMMARY")
+        print(f"Model: {model_name}")
+        print(
+            f"Decision accuracy: {decision_correct}/{total} "
+            f"({decision_correct / total:.1%})"
+        )
+        print(
+            f"Tool accuracy:     {tool_correct}/{total} "
+            f"({tool_correct / total:.1%})"
+        )
+        print(
+            f"Exact args:        {args_correct}/{total} "
+            f"({args_correct / total:.1%})"
+        )
+        print(f"Invalid outputs:   {errors}/{total}")
+        print(f"Total time:        {total_seconds:.2f}s")
+        print(f"Average latency:   {total_seconds / total:.2f}s")
+
+    finally:
+        if (
+            http_client is not None
+            and stream_context is not None
+            and session is not None
+        ):
+            await close_mcp(
+                http_client,
+                stream_context,
+                session,
+            )
 
 
 if __name__ == "__main__":
-    run_benchmark()
+    asyncio.run(run_benchmark())

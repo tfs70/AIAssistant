@@ -14,8 +14,7 @@ from module.chat_memory_module import (
 from module.conversation_model import ConversationRequest
 from module.conversation_module import send_message
 from module.generator_module import generate_answer
-from module.mcp_tool_executor_module import execute_mcp_for_question
-
+from module.mcp_tool_executor_module import route_and_execute_question
 
 # ---------------------------------------------------------
 # Configuration
@@ -194,6 +193,15 @@ with st.sidebar:
 
     st.divider()
 
+    st.divider()
+    st.header("تنظیمات پاسخ")
+
+    use_rag = st.checkbox(
+        "استفاده از اسناد (RAG)",
+        value=True,
+        help="در صورت فعال بودن، هنگام انتخاب مسیر RAG اسناد مرتبط جست‌وجو می‌شوند.",
+    )
+
     st.header("گفتگوها")
 
     if st.button(
@@ -343,8 +351,8 @@ if user_message and user_message.strip():
                 response = send_message(
                     request=request,
                     generate_answer=generate_answer,
-                    use_rag=True,
-                    tool_executor=execute_mcp_for_question,
+                    use_rag=use_rag,
+                    tool_executor=route_and_execute_question,
                 )
 
                 st.markdown(response.message)

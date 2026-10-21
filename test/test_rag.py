@@ -1,76 +1,73 @@
-import os
 
-from module.rag_module import (
-    get_or_build_vector_store,
-    load_text_file,
-    retrieve_context,
-    split_documents,
-)
+from unittest.mock import Mock
+
+import pytest
+
+from module import rag_module
 
 
-TEST_FILE_PATH: str = "data/test_rag.txt"
-CHROMA_DIRECTORY: str = "data/chroma_db"
+def test_retrieve_context_returns_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test retrieval formatting without accessing the real Chroma index."""
 
+    documents = [
+        Mock(
+            page_content="اطلاعات مربوط به سفارش خرید",
+            metadata={
+                "relative_source": "PurchaseOrder.pdf",
+                "page_number": 2,
+            },
+        ),
+        Mock(
+            page_content="اطلاعات مربوط به تأمین‌کننده",
+            metadata={
+                "relative_source": "SupplyContract.pdf",
+            },
+        ),
+    ]
 
-def test_rag() -> None:
-    """Test RAG retrieval"""
+    vector_store = Mock()
+    vector_store.similarity_search.return_value = documents
 
-    if os.path.exists(path=CHROMA_DIRECTORY):
-        import shutil
-
-        shutil.rmtree(
-            path=CHROMA_DIRECTORY,
-        )
-
-    documents = load_text_file(
-        file_path=TEST_FILE_PATH,
+    create_vector_store = Mock(return_value=vector_store)
+    monkeypatch.setattr(
+        rag_module,
+        "create_vector_store",
+        create_vector_store,
     )
 
-    assert len(documents) > 0
-
-    print()
-    print("===== DOCUMENTS =====")
-    print(f"Documents: {len(documents)}")
-
-    chunks = split_documents(
-        documents=documents,
-    )
-
-    assert len(chunks) > 0
-
-    print()
-    print("===== CHUNKS =====")
-    print(f"Chunks: {len(chunks)}")
-
-    vector_store = get_or_build_vector_store(
-        chunks=chunks,
-    )
-
-    query: str = "میزان فروش شرکت در ماه جاری چقدر است؟"
-
-    results = retrieve_context(
-        query=query,
-        vector_store=vector_store,
+    result = rag_module.retrieve_context(
+        query="اطلاعات سفارش خرید",
         k=2,
     )
 
-    assert len(results) > 0
+    create_vector_store.assert_called_once()
+    vector_store.similarity_search.assert_called_once_with(
+        query="اطلاعات سفارش خرید",
+        k=2,
+    )
 
-    print()
-    print("===== RETRIEVAL =====")
-    print(f"Query: {query}")
-    print()
-
-    for index, result in enumerate(results):
-        print(f"Result {index + 1}:")
-        print(result.page_content)
-        print()
-
-    print("=====================")
-
-    print()
-    print("test_rag: PASSED")
+    assert "اطلاعات مربوط به سفارش خرید" in result
+    assert "اطلاعات مربوط به تأمین‌کننده" in result
+    assert "PurchaseOrder.pdf" in result
+    assert "SupplyContract.pdf" in result
+    assert "page: 2" in result
 
 
-if __name__ == "__main__":
-    test_rag()
+def test_retrieve_context_returns_empty_for_blank_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank query must not open the vector store."""
+
+    create_vector_store = Mock()
+    monkeypatch.setattr(
+        rag_module,
+        "create_vector_store",
+        create_vector_store,
+    )
+
+    result = rag_module.retrieve_context(query="   ")
+
+    assert result == ""
+    create_vector_store.assert_not_called()

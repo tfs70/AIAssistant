@@ -23,45 +23,92 @@ SYSTEM_PROMPT: Final[str] = """
 تو ماژول تصمیم‌گیری یک دستیار هوشمند هستی.
 
 وظیفه تو فقط تعیین مسیر درخواست است؛
-نباید ابزارها را اجرا کنی، اطلاعاتی را از خودت بسازی
-یا پاسخ نهایی درخواست کاربر را تولید کنی.
+نباید ابزارها را اجرا کنی یا پاسخ نهایی کاربر را تولید کنی.
 
 مسیرهای مجاز:
+- chat: گفت‌وگوی عادی، بدون ابزار و بدون جست‌وجوی اسناد
+- tool: استفاده از یک یا چند ابزار
+- rag: جست‌وجو در اسناد
+- tool_and_rag: استفاده هم‌زمان از ابزار و جست‌وجوی اسناد
 
-1. chat:
-   درخواست گفت‌وگوی عادی است و به ابزار یا جست‌وجوی اسناد نیاز ندارد.
+قوانین انتخاب ابزار:
+1. ابزارها را فقط از فهرست ارائه‌شده انتخاب کن.
+2. انتخاب را بر اساس توضیحات و input_schema واقعی ابزار انجام بده.
+3. اگر چند ابزار برای بخش‌های مختلف درخواست لازم‌اند، همه را انتخاب کن.
+4. اگر ابزار لازم نیست، tool_calls باید آرایه خالی باشد.
+5. نام ابزار و پارامترها را حدس نزن.
 
-2. tool:
-   برای پاسخ به درخواست، یک یا چند ابزار از فهرست موجود لازم است.
 
-3. rag:
-   درخواست نیازمند جست‌وجو در اسناد و منابع متنی موجود است.
+قوانین بسیار مهم آرگومان‌ها:
 
-4. tool_and_rag:
-   درخواست هم به اجرای ابزار و هم به جست‌وجو در اسناد نیاز دارد.
+1. ابتدا منظور کاربر را از درخواست فعلی و زمینه معتبر مکالمه استخراج کن؛
+   سپس ابزار مناسب را انتخاب کن و آرگومان‌های آن را بساز.
 
-قوانین:
+2. اصل اساسی: حداقل آرگومان‌های لازم را ارسال کن.
+   هر آرگومان باید شواهد مشخصی در درخواست فعلی یا زمینه معتبر مکالمه
+   داشته باشد. اگر چنین شواهدی وجود ندارد، آرگومان را حذف کن؛
+   حتی اگر مقدار آن متداول، مفید یا منطقی به نظر برسد.
 
-- ابزارها را فقط از فهرست ارائه‌شده انتخاب کن.
-- انتخاب ابزار باید بر اساس شرح و schema همان ابزار باشد.
-- نام ابزارها و پارامترهای آن‌ها را از روی نام یا حدس انتخاب نکن.
-- اگر چند ابزار برای بخش‌های مختلف درخواست لازم‌اند، همه را انتخاب کن.
-- فقط پارامترهایی را ارسال کن که مقدارشان از درخواست کاربر
-  یا از زمینه معتبر مکالمه قابل استخراج است.
-- مقادیر متنی کاربر، مانند نام اشخاص، شرکت‌ها، برندها و تأمین‌کنندگان،
-  باید بدون ترجمه یا تغییر معنایی حفظ شوند.
-- اگر مقدار یک پارامتر مشخص نیست، آن را حدس نزن.
-- برای پارامترهای اختیاریِ مشخص‌نشده، مقدار ارسال نکن.
-- پارامترهای الزامی ابزار باید از اطلاعات موجود قابل تأمین باشند.
-  اگر قابل تأمین نیستند، آن ابزار را فراخوانی نکن و به‌جای آن
-  مسیر chat را انتخاب کن و در فیلد reason نیاز به اطلاعات بیشتر را توضیح بده.
-- اگر درخواست به اسناد نیاز ندارد، rag_query را null قرار بده.
-- اگر درخواست به ابزار نیاز ندارد، tool_calls باید آرایه خالی باشد.
-- اگر درخواست به جست‌وجوی اسناد نیاز ندارد، rag_query باید null باشد.
-- confidence عددی بین 0 و 1 است.
-- خروجی باید فقط JSON معتبر باشد؛ بدون Markdown و توضیح بیرون از JSON.
+3. مقدار پارامتر را فقط در یکی از این شرایط ارسال کن:
+   - کاربر مقدار آن را صریحاً بیان کرده است.
+   - مقدار آن بدون ابهام از درخواست کاربر قابل استخراج است.
+   - مقدار آن در زمینه معتبر مکالمه مشخص شده و هنوز برای درخواست
+     فعلی معتبر است.
 
-قالب خروجی:
+4. اطلاعات عمومی، عادت‌های رایج، نمونه‌های موجود در توضیحات ابزار،
+   مقادیر پیش‌فرض schema و حدس شخصی، شواهد معتبر برای تعیین مقدار
+   پارامتر نیستند.
+
+5. اگر کاربر تعداد نتایج را مشخص نکرده است، پارامتر مربوط به تعداد
+   نتایج را ارسال نکن. واژه‌هایی مانند «بیشترین»، «برترین» یا
+   «لیست کن» به‌تنهایی تعداد مشخصی را تعیین نمی‌کنند.
+
+6. اگر کاربر بازه زمانی مشخصی را بیان کرده است، مقدار پارامتر زمانی
+   را دقیقاً از همان بازه استخراج کن؛ اما پارامترهای اختیاری نامرتبط
+   را صرفاً به دلیل مشخص بودن بازه زمانی اضافه نکن.
+
+7. مقدار default در input_schema متعلق به قرارداد ابزار است.
+   اگر کاربر مقدار آن پارامتر را مشخص نکرده، پارامتر اختیاری را
+   حذف کن تا ابزار یا سرور MCP مطابق قرارداد خودش عمل کند.
+
+8. پارامتر نامشخص را با null، صفر، عدد رایج یا مقدار پیش‌فرض
+   جایگزین نکن؛ آن را از arguments حذف کن، مگر اینکه پارامتر
+   اجباری باشد و schema یا قرارداد ابزار صراحتاً مقدار null را
+   به‌عنوان ورودی معتبر الزامی کرده باشد.
+
+9. نام اشخاص، شرکت‌ها، برندها و تأمین‌کنندگان را با حفظ عبارت
+   ارائه‌شده توسط کاربر منتقل کن. پیشوندهای نام شرکت را خودسرانه
+   حذف نکن و نام را ترجمه یا بازنویسی نکن.
+
+10. قبل از تولید JSON نهایی، تمام آرگومان‌ها را جداگانه بررسی کن:
+    - چه عبارت یا اطلاعاتی این مقدار را توجیه می‌کند؟
+    - آیا مقدار واقعاً از درخواست یا زمینه معتبر استخراج شده است؟
+    - آیا می‌توان بدون این آرگومان درخواست را با قرارداد ابزار اجرا کرد؟
+    اگر مقدار مستند نیست، یا پارامتر اختیاری و غیرضروری است،
+    آن را حذف کن.
+
+11. بررسی نهایی باید روی خود JSON انجام شود، نه فقط روی reason.
+    نوشتن اینکه پارامتری مشخص نشده، مجوز ارسال مقدار حدسی آن نیست.
+    بین توضیح تصمیم و آرگومان‌های خروجی هیچ تناقضی نباید وجود داشته باشد.
+
+12. اگر پارامتر اجباری است و مقدار معتبر آن در دسترس نیست، ابزار را
+    با مقدار حدسی فراخوانی نکن. مطابق سیاست مسیریابی، درخواست را
+    برای دریافت اطلاعات لازم به مسیر chat هدایت کن.
+
+13. آرگومان‌های خروجی باید فقط شامل پارامترهای تعریف‌شده در
+    input_schema همان ابزار باشند. هیچ پارامتر اضافه‌ای تولید نکن.
+
+قوانین RAG:
+- اگر جست‌وجوی اسناد لازم نیست، rag_query را null قرار بده.
+- اگر جست‌وجوی اسناد لازم است، rag_query باید پرس‌وجوی مناسب برای
+  جست‌وجو در اسناد باشد.
+- اگر ابزار لازم نیست، tool_calls باید آرایه خالی باشد.
+
+قوانین خروجی:
+- confidence باید عددی بین 0 و 1 باشد.
+- reason باید دلیل کوتاه تصمیم را توضیح دهد.
+- خروجی باید فقط یک JSON معتبر باشد؛ بدون Markdown یا متن اضافی.
+- ساختار خروجی دقیقاً به این صورت باشد:
 
 {
   "route": "chat | tool | rag | tool_and_rag",
@@ -76,6 +123,7 @@ SYSTEM_PROMPT: Final[str] = """
   "reason": "دلیل کوتاه تصمیم"
 }
 """.strip()
+
 
 
 def _tool_value(tool: Any, key: str, default: Any = None) -> Any:
@@ -129,7 +177,7 @@ def _validate_arguments(
     tool: dict[str, Any],
     arguments: dict[str, Any],
 ) -> None:
-    """Validate required fields and basic JSON Schema types."""
+    """Validate required fields and JSON Schema types."""
     schema = tool["input_schema"]
     properties = schema.get("properties", {})
     required = schema.get("required", [])
@@ -173,7 +221,26 @@ def _validate_arguments(
         "boolean": lambda value: isinstance(value, bool),
         "object": lambda value: isinstance(value, dict),
         "array": lambda value: isinstance(value, list),
+        "null": lambda value: value is None,
     }
+
+    def matches_type(value: Any, expected_type: Any) -> bool:
+        """Support both a single JSON Schema type and a type list."""
+        expected_types = (
+            expected_type
+            if isinstance(expected_type, list)
+            else [expected_type]
+        )
+
+        # Unknown or omitted type: no type assertion can be made here.
+        if not expected_types or expected_types == [None]:
+            return True
+
+        return any(
+            type_checks.get(type_name, lambda _: False)(value)
+            for type_name in expected_types
+            if isinstance(type_name, str)
+        )
 
     for argument_name, value in arguments.items():
         property_schema = properties[argument_name]
@@ -182,28 +249,39 @@ def _validate_arguments(
             continue
 
         expected_type = property_schema.get("type")
-        check = type_checks.get(expected_type)
 
-        if check is not None and not check(value):
+        if not matches_type(value, expected_type):
             raise ValueError(
                 f"Argument '{argument_name}' for tool '{tool['name']}' "
                 f"must have type '{expected_type}'."
             )
 
-        if expected_type == "array":
-            item_schema = property_schema.get("items", {})
-            item_type = item_schema.get("type")
+        expected_types = (
+            expected_type
+            if isinstance(expected_type, list)
+            else [expected_type]
+        )
 
-            item_check = type_checks.get(item_type)
+        if "array" not in expected_types or not isinstance(value, list):
+            continue
 
-            if item_check is not None:
-                for index, item in enumerate(value):
-                    if not item_check(item):
-                        raise ValueError(
-                            f"Item {index} of argument '{argument_name}' "
-                            f"for tool '{tool['name']}' must have type "
-                            f"'{item_type}'."
-                        )
+        item_schema = property_schema.get("items", {})
+
+        if not isinstance(item_schema, dict):
+            continue
+
+        item_type = item_schema.get("type")
+
+        if item_type is None:
+            continue
+
+        for index, item in enumerate(value):
+            if not matches_type(item, item_type):
+                raise ValueError(
+                    f"Item {index} of argument '{argument_name}' "
+                    f"for tool '{tool['name']}' must have type "
+                    f"'{item_type}'."
+                )
 
 
 def _parse_model_output(raw_output: Any) -> dict[str, Any]:
@@ -289,6 +367,17 @@ def _validate_decision(
             raise ValueError(
                 f"Arguments for tool '{name}' must be an object."
             )
+
+        schema = tools_by_name[name]["input_schema"]
+        required = set(schema.get("required", []))
+
+        # Remove null values only from optional arguments.
+        # Required arguments remain so that validation rejects null.
+        arguments = {
+            key: value
+            for key, value in arguments.items()
+            if value is not None or key in required
+        }
 
         _validate_arguments(tools_by_name[name], arguments)
 
