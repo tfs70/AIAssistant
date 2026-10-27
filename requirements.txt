@@ -10,6 +10,7 @@ mcp
 pypdf
 python-docx
 pytest
+mem0ai==2.2.1
 
 # chromadb
 # langchain-chroma

@@ -47,6 +47,9 @@ python -m test.test_tool_selection_benchmark
 python -m test.test_real_generator_with_mcp
 python -m test.test_real_generator_with_mcp
 python -m test.test_real_conversation_with_mcp
+python -m test.smoke_mem0_pilot
+python -m pytest test/test_mem0_isolation.py -v -s
+python -u -m pytest test/test_mem0_isolation.py -vv -s --override-ini="python_functions=test_*"
 
 
 python -m streamlit run ui/streamlit_app.py   
@@ -56,7 +59,6 @@ python -m streamlit run ui/streamlit_app.py
 
 
 ## پاک‌سازی حافظه‌های تستی، بدون حذف Vector Store#
-
 Set-Location "D:\__Personal\Projects\AIAssistant"
 
 # حذف تاریخچه گفتگوها و پیام‌های ذخیره‌شده

@@ -61,7 +61,7 @@ QUESTIONS: list[dict[str, Any]] = [
         "args": {"vendorNames": ["آریا"]},
     },
     {
-        "query": "شرکت صنایع غذایی بهار چند درصد از خریدهای ما رو تأمین کرده؟",
+        "query": "شرکت تاک آریا تجارت چند درصد از خریدهای ما رو تأمین کرده؟",
         "tool": "get_vendor_purchase_share",
         "args": {"vendorNames": ["صنایع غذایی بهار"]},
     },
