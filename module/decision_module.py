@@ -16,8 +16,8 @@ VALID_ROUTES: Final[set[str]] = {
     "tool",
     "rag",
     "tool_and_rag",
+    "out_of_scope",
 }
-
 
 SYSTEM_PROMPT: Final[str] = """
 تو ماژول تصمیم‌گیری یک دستیار هوشمند هستی.
@@ -30,6 +30,7 @@ SYSTEM_PROMPT: Final[str] = """
 - tool: استفاده از یک یا چند ابزار
 - rag: جست‌وجو در اسناد
 - tool_and_rag: استفاده هم‌زمان از ابزار و جست‌وجوی اسناد
+- out_of_scope: درخواست نامرتبط با حوزه کاری دستیار Persis ERP
 
 قوانین انتخاب ابزار:
 1. ابزارها را فقط از فهرست ارائه‌شده انتخاب کن.
@@ -115,6 +116,19 @@ SYSTEM_PROMPT: Final[str] = """
 - اگر ابزار لازم نیست، tool_calls باید آرایه خالی باشد.
 
 
+قوانین تشخیص محدوده درخواست:
+- حوزه اصلی دستیار، نرم‌افزار ERP و فرایندهای مرتبط با آن است.
+- درخواست‌های مربوط به اطلاعات عملیاتی ERP، ابزارها، اسناد،
+  راهنمای سیستم، فرایندهای سازمانی و پشتیبانی نرم‌افزار در محدوده هستند.
+- احوال‌پرسی و گفت‌وگوی کوتاه مانند سلام و خداحافظی مسیر chat هستند.
+- سؤال‌های عمومی مستقل از ERP، مانند فاصله اجرام آسمانی،
+  اطلاعات جغرافیایی، تاریخ، ورزش و سرگرمی، خارج از محدوده هستند.
+- برای چنین درخواست‌هایی حتماً مسیر out_of_scope را انتخاب کن.
+- درخواست خارج از محدوده را به chat هدایت نکن.
+- در مسیر out_of_scope، مقدار tool_calls باید آرایه خالی
+  و rag_query باید null باشد.
+
+
 قوانین خروجی:
 - confidence باید عددی بین 0 و 1 باشد.
 - reason باید دلیل کوتاه تصمیم را توضیح دهد.
@@ -122,7 +136,7 @@ SYSTEM_PROMPT: Final[str] = """
 - ساختار خروجی دقیقاً به این صورت باشد:
 
 {
-  "route": "chat | tool | rag | tool_and_rag",
+  "route": "chat | tool | rag | tool_and_rag | out_of_scope",
   "tool_calls": [
     {
       "name": "نام دقیق ابزار",
@@ -421,6 +435,11 @@ def _validate_decision(
         raise ValueError(
             "The tool_and_rag route requires tool calls and a RAG query."
         )
+
+    if route == "out_of_scope" and (has_tools or has_rag):
+        raise ValueError(
+            "The out_of_scope route cannot contain tool calls or a RAG query."
+        ) 
 
     return {
         "route": route,

@@ -233,6 +233,17 @@ async def _route_and_execute_question(
         http_client, stream_context, session = await connect_mcp()
 
         tools = await get_available_tools(session=session)
+
+        # print("\n========== MCP AVAILABLE TOOLS ==========")
+
+        # for tool in tools:
+        #     print(f"\nName: {tool.name}")
+        #     print(f"Description: {tool.description}")
+        #     print(f"Tool Object: {tool}")
+
+        # print("\n=========================================")
+
+
         available_tools = _build_tool_catalog(tools)
 
         # 2. Let the decision model select a route and tool calls.
@@ -252,7 +263,7 @@ async def _route_and_execute_question(
         }
 
         # 3. Chat and RAG-only routes require no tool execution.
-        if route in {"chat", "rag"}:
+        if route in {"chat", "rag", "out_of_scope"}:
             return response
 
         # 4. Execute every validated tool call.

@@ -28,11 +28,23 @@ from module.rag_module import (
 
 RouteExecutor = Callable[[str], dict[str, Any]]
 
-VALID_ROUTES = {"chat", "tool", "rag", "tool_and_rag"}
+VALID_ROUTES = {
+    "chat",
+    "tool",
+    "rag",
+    "tool_and_rag",
+    "out_of_scope",
+}
 
 # آستانه اولیه و قابل تنظیم برای تشخیص ارتباط سؤال با اسناد.
 # این مقدار باید با آزمون پرسش‌های واقعی تنظیم شود.
 RAG_FALLBACK_THRESHOLD = 0.24
+
+OUT_OF_SCOPE_MESSAGE = (
+    "این درخواست خارج از محدوده کاری دستیار Persis ERP است. "
+    "من می‌توانم در زمینه استفاده از سیستم ERP، "
+    "فرایندهای سازمانی و اطلاعات موجود در سیستم راهنمایی‌ات کنم."
+)
 
 
 def _normalize_persian(text: str) -> str:
@@ -409,7 +421,10 @@ def send_message(
     # 7. تولید پاسخ
     stage_started = time.perf_counter()
 
-    answer = generate_answer(final_context)
+    if route == "out_of_scope":
+        answer = OUT_OF_SCOPE_MESSAGE
+    else:
+        answer = generate_answer(final_context)
 
     timings["answer_generation"] = (
         time.perf_counter() - stage_started
